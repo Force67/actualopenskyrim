@@ -12,6 +12,7 @@ set(TESV_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/TESV)
 # Win32 API subset for non-Windows builds; engine code calls Win32 as the
 # original does.
 set(OPENSKYRIM_PLATFORM_INCLUDE ${CMAKE_CURRENT_SOURCE_DIR}/Platform/Linux/include)
+set(OPENSKYRIM_PLATFORM_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/Platform/Linux/src/Win32.cpp)
 
 add_subdirectory(TESV/BSCore)
 add_subdirectory(TESV/Gamebryo/CoreLibs/NiMain)
