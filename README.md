@@ -24,3 +24,7 @@ cmake --build build
 ```
 
 You need your own copy of Skyrim Special Edition for the game data.
+
+## License
+
+GNU General Public License v3.0. See [LICENSE](LICENSE).
