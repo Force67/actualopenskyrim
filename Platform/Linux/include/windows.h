@@ -14,6 +14,19 @@ using BOOL = int;
 using DWORD = uint32_t;
 using LONG = int32_t;
 
+union LARGE_INTEGER
+{
+	struct
+	{
+		DWORD LowPart;
+		LONG HighPart;
+	};
+	int64_t QuadPart;
+};
+
+BOOL QueryPerformanceCounter(LARGE_INTEGER* lpPerformanceCount);
+BOOL QueryPerformanceFrequency(LARGE_INTEGER* lpFrequency);
+
 inline DWORD GetCurrentThreadId()
 {
 	return static_cast<DWORD>(gettid());
@@ -72,11 +85,13 @@ struct MEMORYSTATUSEX
 };
 
 BOOL GlobalMemoryStatusEx(MEMORYSTATUSEX* lpBuffer);
+DWORD GetTickCount();
 
 constexpr unsigned int MB_ICONERROR = 0x10;
 int MessageBoxA(void* hWnd, const char* lpText, const char* lpCaption, unsigned int uType);
 
 // MSVC CRT functions the engine calls.
+int64_t _time64(int64_t* apTime);
 #include <cstdlib>
 #include <cstring>
 #include <malloc.h>

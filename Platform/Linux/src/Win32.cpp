@@ -1,8 +1,40 @@
 #include <windows.h>
 
 #include <cstdio>
+#include <ctime>
 
 #include <sys/sysinfo.h>
+
+int64_t _time64(int64_t* apTime)
+{
+	int64_t iTime = static_cast<int64_t>(time(nullptr));
+	if (apTime)
+		*apTime = iTime;
+	return iTime;
+}
+
+DWORD GetTickCount()
+{
+	timespec ts;
+	if (clock_gettime(CLOCK_MONOTONIC, &ts))
+		return 0;
+	return static_cast<DWORD>(uint64_t(ts.tv_sec) * 1000 + ts.tv_nsec / 1000000);
+}
+
+BOOL QueryPerformanceCounter(LARGE_INTEGER* lpPerformanceCount)
+{
+	timespec ts;
+	if (clock_gettime(CLOCK_MONOTONIC, &ts))
+		return 0;
+	lpPerformanceCount->QuadPart = int64_t(ts.tv_sec) * 1000000000 + ts.tv_nsec;
+	return 1;
+}
+
+BOOL QueryPerformanceFrequency(LARGE_INTEGER* lpFrequency)
+{
+	lpFrequency->QuadPart = 1000000000;
+	return 1;
+}
 
 BOOL GlobalMemoryStatusEx(MEMORYSTATUSEX* lpBuffer)
 {

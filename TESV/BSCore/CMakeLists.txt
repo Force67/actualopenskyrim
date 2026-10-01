@@ -1,4 +1,8 @@
 add_library(bscore STATIC
+  BSTArray.cpp
+  BSRandom.cpp
+  BSStringUtilities.cpp
+  BSPrecisionTimer.cpp
   ZeroOverheadHeap.cpp
   HeapBlocks.cpp
   BSTObjectArena.cpp

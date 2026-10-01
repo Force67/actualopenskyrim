@@ -15,6 +15,9 @@
 #include <new>
 #include <windows.h>
 
+IMemoryManagerFile::~IMemoryManagerFile() = default;
+IMemoryManagerFileFactory::~IMemoryManagerFileFactory() = default;
+
 namespace MemoryManagement
 {
 	class PMPEventSource : public BSTEventSource<PMPEvent>, public BSTSingletonImplicit<PMPEventSource>
@@ -263,7 +266,7 @@ ScrapHeap* MemoryManager::GetThreadScrapHeap()
 	{
 		AutoMemContext kContext(MC_CORE_SYSTEM);
 		auto* pScrapHeap = reinterpret_cast<ThreadScrapHeap*>(aThreadScrapHeapBuffer);
-		new (&pScrapHeap->Heap) ScrapHeap(ScrapHeap::QMaxMemory(), THREAD_SCRAP_HEAP_MIN_COMMIT);
+		new (&pScrapHeap->Heap) ScrapHeap(uint32_t(ScrapHeap::QMaxMemory()), THREAD_SCRAP_HEAP_MIN_COMMIT);
 		pScrapHeap->pNext = nullptr;
 		pThreadScrapHeapTLS = pScrapHeap;
 
@@ -537,6 +540,11 @@ void MemoryManager::Initialize()
 	SpecifyMemoryLayout();
 	bInitialized = true;
 	SpecifyPools();
+}
+
+IMemoryHeap* MemoryManager::GetHeapForContext(MEM_CONTEXT aeContext) const
+{
+	return pHeapsByContextA[aeContext];
 }
 
 IMemoryHeap* MemoryManager::GetHeapByIndex(unsigned int auiIndex) const

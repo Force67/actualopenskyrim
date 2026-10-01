@@ -2,6 +2,7 @@
 
 #include "BSCore/MemoryDefs.h"
 #include "BSCore/ScrapHeap.h"
+#include "BSCore/BSTSingleton.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -13,6 +14,27 @@ struct MemoryStats;
 struct MemoryPoolStats;
 class IMemoryTracker;
 template <class Event> class BSTEventSink;
+
+class IMemoryManagerFile
+{
+public:
+	virtual ~IMemoryManagerFile();
+	virtual int Read(void* apBuffer, size_t auiSize) = 0;
+	virtual int Write(const void* apBuffer, size_t auiSize) = 0;
+	virtual int Size() = 0;
+	virtual void Seek(int aiOffset) = 0;
+};
+static_assert(sizeof(IMemoryManagerFile) == 8);
+
+class IMemoryManagerFileFactory : public BSTSingletonExplicit<IMemoryManagerFileFactory>
+{
+public:
+	virtual ~IMemoryManagerFileFactory();
+	virtual bool Create(const char* apName, IMemoryManagerFile*& arpFile) = 0;
+	virtual bool OpenSingletonFile(const char* apName, IMemoryManagerFile*& arpFile) = 0;
+	virtual bool CloseSingletonFile(IMemoryManagerFile*& arpFile) = 0;
+};
+static_assert(sizeof(IMemoryManagerFileFactory) == 8);
 
 namespace CompactingStore
 {
@@ -65,9 +87,9 @@ public:
 	{
 		ScrapHeap Heap;
 		ThreadScrapHeap* pNext;
-		unsigned int OwningThread;
 	};
-	static_assert(sizeof(ThreadScrapHeap) == 0xA0);
+	static_assert(sizeof(ThreadScrapHeap) == 0x98);
+	static_assert(offsetof(ThreadScrapHeap, pNext) == 0x90);
 
 	~MemoryManager();
 
@@ -100,10 +122,13 @@ public:
 	void CleanCompactingStore(bool abAlwaysCompact);
 	void CompactCompactingStore();
 	void StepCompactingStoreMerge();
+	unsigned int QMainThreadMemoryProblemPassSignal() { return iMainThreadMemoryProblemPassSignal; }
+	unsigned int ClearMainThreadMemoryProblemPassSignal() { return iMainThreadMemoryProblemPassSignal = 0; }
 	void SetExternalHavokAllocator(IMemoryHeap* apAllocator);
 	IMemoryHeap* QExternalHavokAllocator() const;
 	void GetExternalHavokAllocatorStats(MemoryStats* apStats) const;
 	IMemoryHeap* GetHeapByIndex(unsigned int auiIndex) const;
+	IMemoryHeap* GetHeapForContext(MEM_CONTEXT aeContext) const;
 	bool GetHeapStats(unsigned int auiIndex, bool abFullBlockInfo, HeapStats* apStats) const;
 	bool GetPhysicalHeapStats(unsigned int auiIndex, bool abFullBlockInfo, HeapStats* apStats) const;
 	bool GetDefaultHeapStats(unsigned int auiIndex, bool abFullBlockInfo, HeapStats* apStats) const;
@@ -180,4 +205,5 @@ static_assert(offsetof(MemoryManager, pSmallBlockAllocator) == 0x430);
 static_assert(offsetof(MemoryManager, pCompactingStore) == 0x438);
 static_assert(offsetof(MemoryManager, bAllowPoolUse) == 0x449);
 static_assert(offsetof(MemoryManager, iAlignmentForPools) == 0x460);
+static_assert(offsetof(MemoryManager, iMainThreadMemoryProblemPassSignal) == 0x464);
 static_assert(offsetof(MemoryManager, iFailedAllocationSize) == 0x468);
