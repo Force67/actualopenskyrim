@@ -13,6 +13,26 @@
 using BOOL = int;
 using DWORD = uint32_t;
 using LONG = int32_t;
+#define WINAPI
+
+using HANDLE = void*;
+
+constexpr DWORD INFINITE = 0xFFFFFFFF;
+constexpr DWORD WAIT_OBJECT_0 = 0;
+constexpr DWORD WAIT_TIMEOUT = 258;
+constexpr DWORD WAIT_FAILED = 0xFFFFFFFF;
+
+HANDLE CreateSemaphoreW(void* lpSemaphoreAttributes, LONG lInitialCount, LONG lMaximumCount, const wchar_t* lpName);
+BOOL ReleaseSemaphore(HANDLE hSemaphore, LONG lReleaseCount, LONG* lpPreviousCount);
+DWORD WaitForSingleObject(HANDLE hHandle, DWORD dwMilliseconds);
+BOOL CloseHandle(HANDLE hObject);
+[[noreturn]] void ExitThread(DWORD dwExitCode);
+using LPTHREAD_START_ROUTINE = DWORD (WINAPI*)(void*);
+HANDLE GetCurrentThread();
+HANDLE CreateThread(void* lpThreadAttributes, size_t dwStackSize, LPTHREAD_START_ROUTINE lpStartAddress,
+	void* lpParameter, DWORD dwCreationFlags, DWORD* lpThreadId);
+DWORD ResumeThread(HANDLE hThread);
+BOOL SetThreadPriority(HANDLE hThread, int nPriority);
 
 union LARGE_INTEGER
 {

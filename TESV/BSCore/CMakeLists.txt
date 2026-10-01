@@ -1,7 +1,20 @@
 add_library(bscore STATIC
+
+  Win32/BSSemaphore_Win32.cpp
+  BSCoreUtils.cpp
+  BSCoreMessage.cpp
+  BSTEvent.cpp
+  BSTimer.cpp
+  Win32/BSTimer_Win32.cpp
+  BSThread.cpp
+  Win32/BSThread_Win32.cpp
+  ../BSSystem/BSFixedString.cpp
+  ../BSSystem/BSStringPool.cpp
+  BSTSmallArray.cpp
   BSTArray.cpp
   BSRandom.cpp
   BSStringUtilities.cpp
+  BSMemoryutility.cpp
   BSPrecisionTimer.cpp
   ZeroOverheadHeap.cpp
   HeapBlocks.cpp

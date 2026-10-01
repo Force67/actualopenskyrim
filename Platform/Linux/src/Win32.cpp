@@ -1,9 +1,43 @@
 #include <windows.h>
 
 #include <cstdio>
+#include <cerrno>
+#include <cstdlib>
+#include <cstring>
+#include <cwchar>
 #include <ctime>
 
+#include <strings.h>
+#include <pthread.h>
+#include <sys/resource.h>
+#include <sys/syscall.h>
+
+void ExitThread(DWORD dwExitCode)
+{
+	pthread_exit(reinterpret_cast<void*>(static_cast<uintptr_t>(dwExitCode)));
+}
+
 #include <sys/sysinfo.h>
+
+extern "C" int* _errno()
+{
+	return &errno;
+}
+
+extern "C" void _invalid_parameter_noinfo()
+{
+	std::abort();
+}
+
+extern "C" int _stricmp(const char* apFirst, const char* apSecond)
+{
+	return strcasecmp(apFirst, apSecond);
+}
+
+extern "C" int _wcsicmp(const wchar_t* apFirst, const wchar_t* apSecond)
+{
+	return wcscasecmp(apFirst, apSecond);
+}
 
 int64_t _time64(int64_t* apTime)
 {
@@ -61,6 +95,208 @@ int MessageBoxA(void*, const char* lpText, const char* lpCaption, unsigned int)
 
 #include <map>
 #include <mutex>
+#include <condition_variable>
+#include <memory>
+#include <unordered_map>
+
+namespace
+{
+	struct Semaphore
+	{
+		std::mutex mutex;
+		std::condition_variable changed;
+		LONG count;
+		LONG maximum;
+	};
+	struct Thread
+	{
+		std::mutex mutex;
+		std::condition_variable changed;
+		DWORD id = 0;
+		bool finished = false;
+		LPTHREAD_START_ROUTINE start;
+		void* parameter;
+	};
+	std::unordered_map<HANDLE, std::shared_ptr<Thread>> threads;
+
+	void ThreadFinished(void* pointer)
+	{
+		auto* thread = static_cast<Thread*>(pointer);
+		std::lock_guard lock(thread->mutex);
+		thread->finished = true;
+		thread->changed.notify_all();
+	}
+
+	void* ThreadStart(void* pointer)
+	{
+		std::unique_ptr<std::shared_ptr<Thread>> argument(static_cast<std::shared_ptr<Thread>*>(pointer));
+		auto thread = *argument;
+		argument.reset();
+		{
+			std::lock_guard lock(thread->mutex);
+			thread->id = static_cast<DWORD>(syscall(SYS_gettid));
+			thread->changed.notify_all();
+		}
+		DWORD result;
+		pthread_cleanup_push(ThreadFinished, thread.get());
+		result = thread->start(thread->parameter);
+		pthread_cleanup_pop(1);
+		return reinterpret_cast<void*>(static_cast<uintptr_t>(result));
+	}
+	std::mutex handleMutex;
+	std::unordered_map<HANDLE, std::shared_ptr<Semaphore>> semaphores;
+
+	std::shared_ptr<Thread> FindThread(HANDLE handle)
+	{
+		std::lock_guard lock(handleMutex);
+		const auto it = threads.find(handle);
+		return it == threads.end() ? nullptr : it->second;
+	}
+
+	std::shared_ptr<Semaphore> FindSemaphore(HANDLE handle)
+	{
+		std::lock_guard lock(handleMutex);
+		const auto it = semaphores.find(handle);
+		return it == semaphores.end() ? nullptr : it->second;
+	}
+}
+
+HANDLE GetCurrentThread()
+{
+	return reinterpret_cast<HANDLE>(intptr_t(-2));
+}
+
+HANDLE CreateThread(void* lpThreadAttributes, size_t dwStackSize, LPTHREAD_START_ROUTINE lpStartAddress,
+	void* lpParameter, DWORD dwCreationFlags, DWORD* lpThreadId)
+{
+	if (lpThreadAttributes || !lpStartAddress || dwCreationFlags)
+		return nullptr;
+	pthread_attr_t attributes;
+	if (pthread_attr_init(&attributes))
+		return nullptr;
+	int error = pthread_attr_setdetachstate(&attributes, PTHREAD_CREATE_DETACHED);
+	if (!error && dwStackSize)
+		error = pthread_attr_setstacksize(&attributes, dwStackSize);
+	auto thread = std::make_shared<Thread>();
+	thread->start = lpStartAddress;
+	thread->parameter = lpParameter;
+	auto* argument = new std::shared_ptr<Thread>(thread);
+	pthread_t native;
+	if (!error)
+		error = pthread_create(&native, &attributes, ThreadStart, argument);
+	pthread_attr_destroy(&attributes);
+	if (error)
+	{
+		delete argument;
+		return nullptr;
+	}
+	{
+		std::unique_lock lock(thread->mutex);
+		thread->changed.wait(lock, [&] { return thread->id != 0; });
+		if (lpThreadId)
+			*lpThreadId = thread->id;
+	}
+	HANDLE handle = thread.get();
+	std::lock_guard lock(handleMutex);
+	threads.emplace(handle, std::move(thread));
+	return handle;
+}
+
+DWORD ResumeThread(HANDLE hThread)
+{
+	return FindThread(hThread) ? 0 : DWORD(-1);
+}
+
+BOOL SetThreadPriority(HANDLE hThread, int nPriority)
+{
+	int nice;
+	switch (nPriority)
+	{
+	case -15: nice = 19; break;
+	case -2: nice = 2; break;
+	case -1: nice = 1; break;
+	case 0: nice = 0; break;
+	case 1: nice = -1; break;
+	case 2: nice = -2; break;
+	case 15: nice = -20; break;
+	default: return 0;
+	}
+	auto thread = FindThread(hThread);
+	DWORD id;
+	if (hThread == GetCurrentThread())
+		id = static_cast<DWORD>(syscall(SYS_gettid));
+	else
+	{
+		if (!thread)
+			return 0;
+		std::lock_guard lock(thread->mutex);
+		if (thread->finished)
+			return 0;
+		id = thread->id;
+		return setpriority(PRIO_PROCESS, id, nice) == 0;
+	}
+	return setpriority(PRIO_PROCESS, id, nice) == 0;
+}
+
+HANDLE CreateSemaphoreW(void*, LONG lInitialCount, LONG lMaximumCount, const wchar_t* lpName)
+{
+	if (lpName || lMaximumCount <= 0 || lInitialCount < 0 || lInitialCount > lMaximumCount)
+		return nullptr;
+	auto semaphore = std::make_shared<Semaphore>();
+	semaphore->count = lInitialCount;
+	semaphore->maximum = lMaximumCount;
+	HANDLE handle = semaphore.get();
+	std::lock_guard lock(handleMutex);
+	semaphores.emplace(handle, std::move(semaphore));
+	return handle;
+}
+
+BOOL ReleaseSemaphore(HANDLE hSemaphore, LONG lReleaseCount, LONG* lpPreviousCount)
+{
+	auto semaphore = FindSemaphore(hSemaphore);
+	if (!semaphore || lReleaseCount <= 0)
+		return 0;
+	std::lock_guard lock(semaphore->mutex);
+	if (lReleaseCount > semaphore->maximum - semaphore->count)
+		return 0;
+	if (lpPreviousCount)
+		*lpPreviousCount = semaphore->count;
+	semaphore->count += lReleaseCount;
+	semaphore->changed.notify_all();
+	return 1;
+}
+
+DWORD WaitForSingleObject(HANDLE hHandle, DWORD dwMilliseconds)
+{
+	auto semaphore = FindSemaphore(hHandle);
+	if (!semaphore)
+	{
+		auto thread = FindThread(hHandle);
+		if (!thread)
+			return WAIT_FAILED;
+		std::unique_lock lock(thread->mutex);
+		const auto ready = [&] { return thread->finished; };
+		if (dwMilliseconds == INFINITE)
+			thread->changed.wait(lock, ready);
+		else if (!thread->changed.wait_for(lock, std::chrono::milliseconds(dwMilliseconds), ready))
+			return WAIT_TIMEOUT;
+		return WAIT_OBJECT_0;
+	}
+	std::unique_lock lock(semaphore->mutex);
+	const auto ready = [&] { return semaphore->count != 0; };
+	if (dwMilliseconds == INFINITE)
+		semaphore->changed.wait(lock, ready);
+	else if (!semaphore->changed.wait_for(lock, std::chrono::milliseconds(dwMilliseconds), ready))
+		return WAIT_TIMEOUT;
+	--semaphore->count;
+	return WAIT_OBJECT_0;
+}
+
+BOOL CloseHandle(HANDLE hObject)
+{
+	std::lock_guard lock(handleMutex);
+	return semaphores.erase(hObject) != 0 || threads.erase(hObject) != 0;
+}
 #include <sys/mman.h>
 
 static std::map<uintptr_t, size_t> virtualReservations;

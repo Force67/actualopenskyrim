@@ -2,7 +2,7 @@
 
 #include "BSCore/MemoryDefs.h"
 
-extern thread_local MEM_CONTEXT etMemContextS;
+extern thread_local constinit MEM_CONTEXT etMemContextS;
 
 inline MEM_CONTEXT QMemContext() { return etMemContextS; }
 inline void SetMemContext(MEM_CONTEXT aeContext) { etMemContextS = aeContext; }

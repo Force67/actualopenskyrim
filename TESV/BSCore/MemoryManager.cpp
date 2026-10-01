@@ -25,7 +25,7 @@ namespace MemoryManagement
 	};
 }
 
-thread_local MEM_CONTEXT etMemContextS;
+thread_local constinit MEM_CONTEXT etMemContextS;
 
 thread_local bool MemoryManager::bAllowCleanCompactingStoreST = true;
 thread_local unsigned int MemoryManager::uiThreadInitState;
