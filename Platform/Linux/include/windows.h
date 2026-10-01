@@ -107,3 +107,12 @@ inline int memcpy_s(void* dest, size_t destSize, const void* src, size_t count)
 	memcpy(dest, src, count);
 	return 0;
 }
+
+constexpr DWORD MEM_COMMIT = 0x1000;
+constexpr DWORD MEM_RESERVE = 0x2000;
+constexpr DWORD MEM_DECOMMIT = 0x4000;
+constexpr DWORD MEM_RELEASE = 0x8000;
+constexpr DWORD PAGE_READWRITE = 4;
+
+void* VirtualAlloc(void* lpAddress, size_t dwSize, DWORD flAllocationType, DWORD flProtect);
+BOOL VirtualFree(void* lpAddress, size_t dwSize, DWORD dwFreeType);

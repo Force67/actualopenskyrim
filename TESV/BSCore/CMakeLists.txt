@@ -4,6 +4,7 @@ add_library(bscore STATIC
   IMemoryHeap.cpp
   IMemoryStore.cpp
   MemoryManager.cpp
+  ScrapHeap.cpp
 )
 target_include_directories(bscore PUBLIC ${TESV_ROOT})
 if(NOT WIN32)

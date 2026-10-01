@@ -18,7 +18,7 @@ public:
 		FreeBlock* pRight;
 	};
 
-	struct FreeTreeNode : Block
+	struct FreeTreeNode : FreeBlock
 	{
 		FreeTreeNode** ppRoot;
 		FreeTreeNode* pLeftNode;
@@ -34,6 +34,16 @@ public:
 
 	void* Allocate(size_t auiSize, size_t auiAlignment);
 	void Deallocate(void* apBlock);
+	void* Allocate(size_t auiSize, const char* apFile, int aiLine, size_t auiAlignment);
+	bool IsHeapOf(const void* apBlock) const;
+	void SetKeepPages();
+	void ClearKeepPages();
+	void Clean();
+	void CheckReset();
+	static unsigned int GetSmallBlockIndex(size_t auiSize);
+	Block* GetSuccessor(Block* apBlock);
+	void InsertFreeBlock(FreeTreeNode* apBlock);
+	void RemoveFreeBlock(FreeTreeNode* apBlock);
 
 	static size_t QMaxMemory();
 
@@ -60,3 +70,23 @@ public:
 	unsigned int PMPBarrier;
 };
 static_assert(sizeof(ScrapHeap) == 0x90);
+static_assert(sizeof(ScrapHeap::Block) == 0x10);
+static_assert(sizeof(ScrapHeap::FreeBlock) == 0x20);
+static_assert(sizeof(ScrapHeap::FreeTreeNode) == 0x40);
+static_assert(offsetof(ScrapHeap::FreeTreeNode, ppRoot) == 0x20);
+static_assert(offsetof(ScrapHeap::FreeTreeNode, pLeftNode) == 0x28);
+static_assert(offsetof(ScrapHeap::FreeTreeNode, pRightNode) == 0x30);
+static_assert(offsetof(ScrapHeap::FreeTreeNode, uiParentAndBlack) == 0x38);
+static_assert(offsetof(ScrapHeap, pFreeList) == 0x38);
+static_assert(offsetof(ScrapHeap, pLastBlock) == 0x40);
+static_assert(offsetof(ScrapHeap, pBaseAddress) == 0x48);
+static_assert(offsetof(ScrapHeap, pEndAddress) == 0x50);
+static_assert(offsetof(ScrapHeap, pCommitEnd) == 0x58);
+static_assert(offsetof(ScrapHeap, ReserveSize) == 0x60);
+static_assert(offsetof(ScrapHeap, MinCommit) == 0x68);
+static_assert(offsetof(ScrapHeap, TotalAllocated) == 0x70);
+static_assert(offsetof(ScrapHeap, KeepPagesRequest) == 0x78);
+static_assert(offsetof(ScrapHeap, TotalFreeBlocks) == 0x7C);
+static_assert(offsetof(ScrapHeap, FreeSmallBlocks) == 0x80);
+static_assert(offsetof(ScrapHeap, TotalAllocatedBlocks) == 0x84);
+static_assert(offsetof(ScrapHeap, PMPBarrier) == 0x88);
