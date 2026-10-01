@@ -105,3 +105,84 @@ BOOL VirtualFree(void* lpAddress, size_t dwSize, DWORD dwFreeType)
 		return 0;
 	return madvise(reinterpret_cast<void*>(uiStart), uiEnd - uiStart, MADV_DONTNEED) == 0;
 }
+
+void InitializeCriticalSection(CRITICAL_SECTION* lpCriticalSection)
+{
+	*lpCriticalSection = {};
+	lpCriticalSection->LockCount = -1;
+	lpCriticalSection->LockSemaphore = new std::recursive_mutex;
+}
+
+void DeleteCriticalSection(CRITICAL_SECTION* lpCriticalSection)
+{
+	delete static_cast<std::recursive_mutex*>(lpCriticalSection->LockSemaphore);
+}
+
+void EnterCriticalSection(CRITICAL_SECTION* lpCriticalSection)
+{
+	static_cast<std::recursive_mutex*>(lpCriticalSection->LockSemaphore)->lock();
+	lpCriticalSection->OwningThread = reinterpret_cast<void*>(static_cast<uintptr_t>(GetCurrentThreadId()));
+	++lpCriticalSection->RecursionCount;
+}
+
+void LeaveCriticalSection(CRITICAL_SECTION* lpCriticalSection)
+{
+	if (!--lpCriticalSection->RecursionCount)
+		lpCriticalSection->OwningThread = nullptr;
+	static_cast<std::recursive_mutex*>(lpCriticalSection->LockSemaphore)->unlock();
+}
+
+struct TlsSlot
+{
+	uint64_t generation = 0;
+	bool allocated = false;
+};
+struct TlsValue
+{
+	uint64_t generation = 0;
+	void* value = nullptr;
+};
+static TlsSlot tlsSlots[1088];
+static std::mutex tlsLock;
+static thread_local TlsValue tlsValues[1088];
+
+DWORD TlsAlloc()
+{
+	std::lock_guard<std::mutex> lock(tlsLock);
+	for (DWORD i = 0; i < 1088; ++i)
+	{
+		if (!tlsSlots[i].allocated)
+		{
+			tlsSlots[i].allocated = true;
+			++tlsSlots[i].generation;
+			return i;
+		}
+	}
+	return TLS_OUT_OF_INDEXES;
+}
+
+BOOL TlsFree(DWORD dwTlsIndex)
+{
+	std::lock_guard<std::mutex> lock(tlsLock);
+	if (dwTlsIndex >= 1088 || !tlsSlots[dwTlsIndex].allocated)
+		return 0;
+	tlsSlots[dwTlsIndex].allocated = false;
+	return 1;
+}
+
+void* TlsGetValue(DWORD dwTlsIndex)
+{
+	std::lock_guard<std::mutex> lock(tlsLock);
+	if (dwTlsIndex >= 1088 || !tlsSlots[dwTlsIndex].allocated || tlsValues[dwTlsIndex].generation != tlsSlots[dwTlsIndex].generation)
+		return nullptr;
+	return tlsValues[dwTlsIndex].value;
+}
+
+BOOL TlsSetValue(DWORD dwTlsIndex, void* lpTlsValue)
+{
+	std::lock_guard<std::mutex> lock(tlsLock);
+	if (dwTlsIndex >= 1088 || !tlsSlots[dwTlsIndex].allocated)
+		return 0;
+	tlsValues[dwTlsIndex] = { tlsSlots[dwTlsIndex].generation, lpTlsValue };
+	return 1;
+}

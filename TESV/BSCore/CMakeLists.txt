@@ -1,4 +1,11 @@
 add_library(bscore STATIC
+  ZeroOverheadHeap.cpp
+  HeapBlocks.cpp
+  BSTObjectArena.cpp
+  BSSmallBlockAllocator.cpp
+  CompactingStore.cpp
+  AbstractHeap.cpp
+  MemoryHeap.cpp
   BSCRC32.cpp
   BSReadWriteLock.cpp
   IMemoryHeap.cpp

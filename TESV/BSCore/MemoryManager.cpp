@@ -17,13 +17,14 @@
 
 namespace MemoryManagement
 {
-	class PMPEventSource : public BSTEventSource<PMPEvent>
+	class PMPEventSource : public BSTEventSource<PMPEvent>, public BSTSingletonImplicit<PMPEventSource>
 	{
 	};
 }
 
-thread_local MEM_CONTEXT MemoryContextTracker::eThreadContext;
+thread_local MEM_CONTEXT etMemContextS;
 
+thread_local bool MemoryManager::bAllowCleanCompactingStoreST = true;
 thread_local unsigned int MemoryManager::uiThreadInitState;
 thread_local bool MemoryManager::bThreadAllocationPass;
 thread_local unsigned int MemoryManager::uiThreadMemoryProblemDepth;
@@ -31,18 +32,16 @@ thread_local unsigned int MemoryManager::uiThreadMemoryProblemPass;
 thread_local MemoryManager::ThreadScrapHeap* MemoryManager::pThreadScrapHeapTLS;
 alignas(8) thread_local unsigned char MemoryManager::aThreadScrapHeapBuffer[sizeof(ThreadScrapHeap)];
 
+alignas(16) char zeroReturns[32];
+void* pZeroAddress;
+bool bUseSystemAllocator;
+alignas(16) char cpoolStoreBuffer[sizeof(BSSmallBlockAllocator)];
+alignas(16) char ccompactingStoreBuffer[sizeof(CompactingStore::Store)];
+
 namespace
 {
 	constexpr size_t SMALL_BLOCK_MAX_SIZE = 0x200;
 	constexpr size_t THREAD_SCRAP_HEAP_MIN_COMMIT = 0x20000;
-
-	// Allocations of zero bytes return one of two addresses in here, alternating,
-	// so consecutive ones differ.
-	alignas(16) char zeroReturns[32];
-	void* pZeroAddress;
-
-	// Never set by the game; a debugger switch that bypasses the heaps.
-	bool bUseSystemAllocator;
 
 	void* SystemAllocate(size_t aSize, unsigned int auiAlignment, bool abAlignmentRequired)
 	{
@@ -79,7 +78,7 @@ namespace
 
 	bool InPinnedStore(const CompactingStore::Store* apStore, const void* apMem)
 	{
-		return apStore && apMem >= apStore->pAllocBase && apMem <= apStore->pAllocEnd;
+		return apStore && apStore->QAddressInStore(apMem);
 	}
 }
 
@@ -97,8 +96,7 @@ void MemoryManager::UpdateInitState(MemoryManager* apInstanceBuffer, unsigned in
 	}
 
 	uiThreadInitState = 1;
-	if (apInstanceBuffer)
-		new (apInstanceBuffer) MemoryManager();
+	new (apInstanceBuffer) MemoryManager();
 	_mm_mfence();
 	*apuiInitFence = 2;
 }
@@ -146,7 +144,7 @@ MemoryManager::MemoryManager() :
 
 void* MemoryManager::Allocate(size_t aSize, unsigned int auiAlignment, bool abAlignmentRequired)
 {
-	const MEM_CONTEXT eContext = MemoryContextTracker::GetMemContext();
+	const MEM_CONTEXT eContext = QMemContext();
 	IMemoryHeap* const pDefaultHeap = pHeapsByContextA[MC_CORE_UNKNOWN];
 	IMemoryHeap* const pContextHeap = pHeapsByContextA[eContext];
 	if (bUseSystemAllocator || !pDefaultHeap)
@@ -201,17 +199,7 @@ void* MemoryManager::Reallocate(void* apOld, size_t aSize, unsigned int auiAlign
 
 	if (pNew)
 	{
-		size_t uiOldSize = 0;
-		if (pSmallBlockAllocator && pSmallBlockAllocator->QBlockInStore(apOld))
-			uiOldSize = pSmallBlockAllocator->Size(apOld);
-		else if (InPinnedStore(pCompactingStore, apOld))
-			uiOldSize = pCompactingStore->QSizePinned(apOld);
-		else if (IMemoryHeap* pHeap = GetHeapForPointer(apOld))
-			uiOldSize = pHeap->Size(apOld);
-		else if (IMemoryHeap* pPhysicalHeap = GetHeapForPhysicalPointer(apOld))
-			uiOldSize = pPhysicalHeap->Size(apOld);
-		else if (!IsZeroAddress(apOld))
-			uiOldSize = _msize(apOld);
+		const size_t uiOldSize = Size(apOld);
 
 		const size_t uiCopy = uiOldSize < aSize ? uiOldSize : aSize;
 		if (uiCopy)
@@ -250,7 +238,7 @@ void MemoryManager::Deallocate(void* apMem, bool abAlignmentRequired)
 		pHeap->DeallocateAlign(apMem);
 		return;
 	}
-	if (!IsZeroAddress(apMem))
+	if (apMem != pZeroAddress && apMem != reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(pZeroAddress) ^ 0x10))
 		SystemDeallocate(apMem, abAlignmentRequired);
 }
 
@@ -331,4 +319,275 @@ unsigned int MemoryManager::ProcessMemoryProblem(IMemoryHeap* apHeap, int aiMemo
 	const PMPEvent kFinished{ PMPEvent::Finished };
 	BSTSingletonImplicit<PMPEventSource>::QInstance()->Notify(kFinished);
 	return uiThreadMemoryProblemPass;
+}
+
+void MemoryManager::SetExternalHavokAllocator(IMemoryHeap* apAllocator)
+{
+	pExternalHavokAllocator = apAllocator;
+}
+
+IMemoryHeap* MemoryManager::QExternalHavokAllocator() const
+{
+	return pExternalHavokAllocator;
+}
+
+void MemoryManager::GetExternalHavokAllocatorStats(MemoryStats* apStats) const
+{
+	if (pExternalHavokAllocator)
+		pExternalHavokAllocator->GetMemoryStats(apStats);
+	else
+		apStats->pName = nullptr;
+}
+
+bool MemoryManager::GetHeapStats(unsigned int auiIndex, bool abFullBlockInfo, HeapStats* apStats) const
+{
+	IMemoryHeap* pHeap = GetHeapByIndex(auiIndex);
+	if (!pHeap)
+		return false;
+	pHeap->GetHeapStats(apStats, abFullBlockInfo);
+	return true;
+}
+
+bool MemoryManager::GetPhysicalHeapStats(unsigned int auiIndex, bool abFullBlockInfo, HeapStats* apStats) const
+{
+	return GetHeapStats(iNumHeaps + auiIndex, abFullBlockInfo, apStats);
+}
+
+bool MemoryManager::GetDefaultHeapStats(unsigned int auiIndex, bool abFullBlockInfo, HeapStats* apStats) const
+{
+	return GetHeapStats(auiIndex, abFullBlockInfo, apStats);
+}
+
+bool MemoryManager::GetCompactingStoreHeapStats(bool abFullBlockInfo, HeapStats* apStats) const
+{
+	if (!pCompactingStore)
+		return false;
+	pCompactingStore->GetHeapStats(apStats, abFullBlockInfo);
+	return true;
+}
+
+bool MemoryManager::GetCompactingStoreMemoryStats(MemoryStats* apStats) const
+{
+	if (!pCompactingStore)
+	{
+		apStats->pName = nullptr;
+		return false;
+	}
+	pCompactingStore->GetMemoryStats(apStats);
+	return true;
+}
+
+bool MemoryManager::QPoolExists(unsigned int auiPoolIndex) const
+{
+	return pSmallBlockAllocator && auiPoolIndex < pSmallBlockAllocator->QTotalPools();
+}
+
+bool MemoryManager::GetPoolContextInfo(unsigned int, unsigned int* apInfoDest) const
+{
+	memset(apInfoDest, 0, MEM_CONTEXT_COUNT * sizeof(unsigned int));
+	return false;
+}
+
+void MemoryManager::CleanPools()
+{
+	if (pSmallBlockAllocator)
+		pSmallBlockAllocator->RequestDecommit();
+}
+
+void MemoryManager::CleanCompactingStore(bool abAlwaysCompact)
+{
+	if (pCompactingStore)
+	{
+		pCompactingStore->FlushBatchDeallocates();
+		if (bAllowCleanCompactingStoreST)
+			pCompactingStore->RequestDecommit(abAlwaysCompact);
+	}
+}
+
+void MemoryManager::CompactCompactingStore()
+{
+	if (pCompactingStore)
+	{
+		pCompactingStore->FlushBatchDeallocates();
+		pCompactingStore->RequestFullCompact();
+	}
+}
+
+void MemoryManager::StepCompactingStoreMerge()
+{
+	if (pCompactingStore)
+	{
+		pCompactingStore->FlushBatchDeallocates();
+		pCompactingStore->RequestStepMerge();
+	}
+}
+
+void MemoryManager::DeallocateCompactable(CompactingStore::HandleType& arHandle)
+{
+	if (pCompactingStore)
+		pCompactingStore->Deallocate(nullptr, false, arHandle);
+}
+
+void MemoryManager::BeginBatchDeallocateCompactable(CompactingStore::BatchDeallocateOperation& arBatch)
+{
+	if (pCompactingStore)
+		pCompactingStore->BeginBatchDeallocate(nullptr, false, arBatch);
+}
+
+void MemoryManager::DeallocateCompactablePinned(void* apPtr)
+{
+	if (pCompactingStore)
+		pCompactingStore->DeallocatePinned(nullptr, false, apPtr);
+}
+
+bool MemoryManager::AllocateCompactable(CompactingStore::HandleType& arResult, size_t auiSize, size_t auiAlignment, CompactingStore::MoveCallback* apCallback, bool abMustSucceed, bool abCompactBeforeExtend)
+{
+	if (!pCompactingStore)
+		return false;
+	unsigned int uiMemoryPass = 0;
+	bool bAllowSystemAllocs = false;
+	bool bRetriedWithExtension = false;
+	bool bAllowExtend = abCompactBeforeExtend;
+	while (!pCompactingStore->AllocateAlign(nullptr, false, arResult, auiSize, uint32_t(auiAlignment), apCallback, abMustSucceed, bAllowExtend))
+	{
+		if (!abMustSucceed)
+			return false;
+		if (bRetriedWithExtension)
+		{
+			bAllowCleanCompactingStoreST = false;
+			pCompactingStore->FlushBatchDeallocates();
+			uiMemoryPass = ProcessMemoryProblem(pHeapsByContextA[MC_CORE_UNKNOWN], uiMemoryPass, &bAllowSystemAllocs);
+			bAllowCleanCompactingStoreST = true;
+		}
+		else
+		{
+			CleanPools();
+			pCompactingStore->FlushBatchDeallocates();
+			pCompactingStore->RequestCompactForSize(auiSize + auiAlignment);
+			bRetriedWithExtension = bAllowExtend;
+			bAllowExtend = true;
+		}
+	}
+	return true;
+}
+
+void* MemoryManager::AllocateCompactablePinned(size_t auiSize, size_t auiAlignment)
+{
+	if (!pCompactingStore)
+		return nullptr;
+	unsigned int uiMemoryPass = 0;
+	bool bAllowSystemAllocs = false;
+	void* pResult;
+	while (!(pResult = pCompactingStore->AllocateAlignPinned(nullptr, false, auiSize, uint32_t(auiAlignment))))
+		uiMemoryPass = ProcessMemoryProblem(pHeapsByContextA[MC_CORE_UNKNOWN], uiMemoryPass, &bAllowSystemAllocs);
+	return pResult;
+}
+
+MemoryManager::AutoScrapBuffer::AutoScrapBuffer() : pPtr(NextZeroAddress()) {}
+
+MemoryManager::AutoScrapBuffer::AutoScrapBuffer(size_t auiSize, size_t auiAlignment) :
+	pPtr(auiSize ? MemoryManager::Instance().GetThreadScrapHeap()->Allocate(auiSize, auiAlignment) : NextZeroAddress()) {}
+
+MemoryManager::AutoScrapBuffer::~AutoScrapBuffer()
+{
+	if (pPtr != pZeroAddress && pPtr != reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(pZeroAddress) ^ 0x10))
+		MemoryManager::Instance().GetThreadScrapHeap()->Deallocate(pPtr);
+}
+
+MemoryManager::~MemoryManager()
+{
+	BSThreadEvent::KillSDM();
+	if (pCompactingStore)
+	{
+		pCompactingStore->~Store();
+		pCompactingStore = nullptr;
+	}
+	if (pSmallBlockAllocator)
+	{
+		pSmallBlockAllocator->~BSSmallBlockAllocator();
+		pSmallBlockAllocator = nullptr;
+	}
+	if (ppHeaps)
+	{
+		while (iNumHeaps)
+		{
+			IMemoryHeap* pHeap = ppHeaps[iNumHeaps - 1];
+			ppHeaps[iNumHeaps - 1] = nullptr;
+			--iNumHeaps;
+			delete pHeap;
+		}
+		delete[] ppHeaps;
+	}
+	memset(pHeapsByContextA, 0, sizeof(pHeapsByContextA));
+	bInitialized = false;
+	delete[] pAllowOtherContextAllocs;
+	if (ppPhysicalHeaps)
+	{
+		for (uint16_t i = 0; i + 1 < iNumPhysicalHeaps; ++i)
+		{
+			delete ppPhysicalHeaps[i];
+			ppPhysicalHeaps[i] = nullptr;
+		}
+		delete[] ppPhysicalHeaps;
+	}
+}
+
+void MemoryManager::Initialize()
+{
+	SpecifyMemoryLayout();
+	bInitialized = true;
+	SpecifyPools();
+}
+
+IMemoryHeap* MemoryManager::GetHeapByIndex(unsigned int auiIndex) const
+{
+	if (auiIndex < iNumHeaps)
+		return ppHeaps[auiIndex];
+	auiIndex -= iNumHeaps;
+	return auiIndex < iNumPhysicalHeaps ? ppPhysicalHeaps[auiIndex] : nullptr;
+}
+
+unsigned int MemoryManager::QTotalPools()
+{
+	return pSmallBlockAllocator ? pSmallBlockAllocator->QTotalPools() : 0;
+}
+
+bool MemoryManager::GetPoolStats(unsigned int auiPoolIndex, MemoryPoolStats* apStats) const
+{
+	return pSmallBlockAllocator && pSmallBlockAllocator->GetPoolStats(apStats, auiPoolIndex);
+}
+
+bool MemoryManager::GetPoolStats(unsigned int auiPoolIndex, MemoryPoolStats* apStats, unsigned int&) const
+{
+	return pSmallBlockAllocator && pSmallBlockAllocator->GetPoolStats(apStats, auiPoolIndex);
+}
+
+void MemoryManager::CreatePoolStore(unsigned int auiAddressRangeSize, unsigned int auiInitialCommit)
+{
+	pSmallBlockAllocator = new (cpoolStoreBuffer) BSSmallBlockAllocator(auiAddressRangeSize, auiInitialCommit);
+}
+
+void MemoryManager::CreateCompactingStore(size_t auiSize, unsigned int auiInitialCommit)
+{
+	pCompactingStore = new (ccompactingStoreBuffer) CompactingStore::Store(auiSize, auiInitialCommit);
+}
+
+void MemoryManagement::RegisterSink(BSTEventSink<PMPEvent>* apSink)
+{
+	PMPEventSource::QInstance()->RegisterSink(apSink);
+}
+
+void MemoryManagement::UnregisterSink(BSTEventSink<PMPEvent>* apSink)
+{
+	PMPEventSource::QInstance()->UnregisterSink(apSink);
+}
+
+unsigned int MemoryManager::GetMemoryInThreadStacks()
+{
+	return 0;
+}
+
+IMemoryTracker** MemoryManager::QTrackerPtr()
+{
+	return nullptr;
 }

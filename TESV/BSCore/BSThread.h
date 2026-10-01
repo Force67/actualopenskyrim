@@ -1,7 +1,7 @@
 #pragma once
 
-class BSThreadEvent
+namespace BSThreadEvent
 {
-public:
-	static void InitSDM();
-};
+	void InitSDM();
+	void KillSDM();
+}

@@ -2,30 +2,28 @@
 
 #include "BSCore/MemoryDefs.h"
 
-// The memory context of the current thread, which picks the heap allocations
-// come from.
-class MemoryContextTracker
-{
-public:
-	static MEM_CONTEXT GetMemContext() { return eThreadContext; }
-	static void SetMemContext(MEM_CONTEXT aeContext) { eThreadContext = aeContext; }
+extern thread_local MEM_CONTEXT etMemContextS;
 
-private:
-	static thread_local MEM_CONTEXT eThreadContext;
-};
+inline MEM_CONTEXT QMemContext() { return etMemContextS; }
+inline void SetMemContext(MEM_CONTEXT aeContext) { etMemContextS = aeContext; }
 
-// Switches the thread's memory context for a scope.
 class AutoMemContext
 {
 public:
-	explicit AutoMemContext(MEM_CONTEXT aeContext) :
-		eSaved(MemoryContextTracker::GetMemContext())
+	explicit AutoMemContext(MEM_CONTEXT aeContext, bool = true, const char* = nullptr)
 	{
-		MemoryContextTracker::SetMemContext(aeContext);
+		Enter(aeContext);
 	}
+	~AutoMemContext() { Leave(); }
 
-	~AutoMemContext() { MemoryContextTracker::SetMemContext(eSaved); }
+	void Enter(MEM_CONTEXT aeContext, bool = true, const char* = nullptr)
+	{
+		iOldMemContext = QMemContext();
+		SetMemContext(aeContext);
+	}
+	void Leave() { SetMemContext(iOldMemContext); }
 
 private:
-	MEM_CONTEXT eSaved;
+	MEM_CONTEXT iOldMemContext;
 };
+static_assert(sizeof(AutoMemContext) == 4);

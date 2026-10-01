@@ -17,6 +17,7 @@ static_assert(sizeof(MemoryStats) == 0x30);
 class IMemoryStoreBase
 {
 public:
+	IMemoryStoreBase();
 	virtual ~IMemoryStoreBase();
 
 	virtual size_t Size(const void* apBlock) const = 0;
@@ -29,9 +30,12 @@ public:
 	bool ContainsBlock(const void* apBlock) const { return ContainsBlockImpl(apBlock); }
 };
 
+static_assert(sizeof(IMemoryStoreBase) == 8);
+
 class IMemoryStore : public IMemoryStoreBase
 {
 public:
+	IMemoryStore();
 	~IMemoryStore() override;
 
 	void* AllocateAlign(size_t auiSize, uint32_t auiAlignment) { return AllocateAlignImpl(auiSize, auiAlignment); }
@@ -43,3 +47,5 @@ private:
 	virtual void DeallocateAlignImpl(void*& arpBlock) = 0;
 	virtual void* TryAllocateImpl(size_t auiSize, uint32_t auiAlignment);
 };
+
+static_assert(sizeof(IMemoryStore) == 8);

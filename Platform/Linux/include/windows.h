@@ -116,3 +116,37 @@ constexpr DWORD PAGE_READWRITE = 4;
 
 void* VirtualAlloc(void* lpAddress, size_t dwSize, DWORD flAllocationType, DWORD flProtect);
 BOOL VirtualFree(void* lpAddress, size_t dwSize, DWORD dwFreeType);
+
+struct CRITICAL_SECTION
+{
+	void* DebugInfo;
+	LONG LockCount;
+	LONG RecursionCount;
+	void* OwningThread;
+	void* LockSemaphore;
+	uintptr_t SpinCount;
+};
+static_assert(sizeof(CRITICAL_SECTION) == 40);
+
+void InitializeCriticalSection(CRITICAL_SECTION* lpCriticalSection);
+void DeleteCriticalSection(CRITICAL_SECTION* lpCriticalSection);
+void EnterCriticalSection(CRITICAL_SECTION* lpCriticalSection);
+void LeaveCriticalSection(CRITICAL_SECTION* lpCriticalSection);
+
+constexpr DWORD TLS_OUT_OF_INDEXES = 0xFFFFFFFF;
+DWORD TlsAlloc();
+BOOL TlsFree(DWORD dwTlsIndex);
+void* TlsGetValue(DWORD dwTlsIndex);
+BOOL TlsSetValue(DWORD dwTlsIndex, void* lpTlsValue);
+
+inline int memmove_s(void* dest, size_t destSize, const void* src, size_t count)
+{
+	if (!count)
+		return 0;
+	if (!dest || !src)
+		abort();
+	if (count > destSize)
+		return 34;
+	memmove(dest, src, count);
+	return 0;
+}

@@ -8,10 +8,18 @@
 
 class BSSmallBlockAllocator;
 class IMemoryHeap;
+struct HeapStats;
+struct MemoryStats;
+struct MemoryPoolStats;
+class IMemoryTracker;
+template <class Event> class BSTEventSink;
 
 namespace CompactingStore
 {
 	class Store;
+	struct HandleType;
+	class MoveCallback;
+	class BatchDeallocateOperation;
 }
 
 namespace MemoryManagement
@@ -28,6 +36,8 @@ namespace MemoryManagement
 	};
 
 	class PMPEventSource;
+	void RegisterSink(BSTEventSink<PMPEvent>* apSink);
+	void UnregisterSink(BSTEventSink<PMPEvent>* apSink);
 }
 
 // Routes allocations to heaps by memory context, with a small block allocator
@@ -35,6 +45,22 @@ namespace MemoryManagement
 class MemoryManager
 {
 public:
+	struct AutoScrapBuffer
+	{
+		AutoScrapBuffer();
+		AutoScrapBuffer(size_t auiSize, size_t auiAlignment);
+		~AutoScrapBuffer();
+		void* QPtr() const { return pPtr; }
+		void Swap(AutoScrapBuffer& arRhs)
+		{
+			void* pTemp = pPtr;
+			pPtr = arRhs.pPtr;
+			arRhs.pPtr = pTemp;
+		}
+		void* pPtr;
+	};
+	static_assert(sizeof(AutoScrapBuffer) == 8);
+
 	struct ThreadScrapHeap
 	{
 		ScrapHeap Heap;
@@ -42,6 +68,8 @@ public:
 		unsigned int OwningThread;
 	};
 	static_assert(sizeof(ThreadScrapHeap) == 0xA0);
+
+	~MemoryManager();
 
 	static MemoryManager& Instance()
 	{
@@ -63,6 +91,32 @@ public:
 	void* Reallocate(void* apOld, size_t aSize, unsigned int auiAlignment, bool abAlignmentRequired);
 	void Deallocate(void* apMem, bool abAlignmentRequired);
 
+	bool AllocateCompactable(CompactingStore::HandleType& arResult, size_t auiSize, size_t auiAlignment, CompactingStore::MoveCallback* apCallback, bool abMustSucceed, bool abCompactBeforeExtend);
+	void* AllocateCompactablePinned(size_t auiSize, size_t auiAlignment);
+	void DeallocateCompactable(CompactingStore::HandleType& arHandle);
+	void BeginBatchDeallocateCompactable(CompactingStore::BatchDeallocateOperation& arBatch);
+	void DeallocateCompactablePinned(void* apPtr);
+	void CleanPools();
+	void CleanCompactingStore(bool abAlwaysCompact);
+	void CompactCompactingStore();
+	void StepCompactingStoreMerge();
+	void SetExternalHavokAllocator(IMemoryHeap* apAllocator);
+	IMemoryHeap* QExternalHavokAllocator() const;
+	void GetExternalHavokAllocatorStats(MemoryStats* apStats) const;
+	IMemoryHeap* GetHeapByIndex(unsigned int auiIndex) const;
+	bool GetHeapStats(unsigned int auiIndex, bool abFullBlockInfo, HeapStats* apStats) const;
+	bool GetPhysicalHeapStats(unsigned int auiIndex, bool abFullBlockInfo, HeapStats* apStats) const;
+	bool GetDefaultHeapStats(unsigned int auiIndex, bool abFullBlockInfo, HeapStats* apStats) const;
+	bool GetCompactingStoreHeapStats(bool abFullBlockInfo, HeapStats* apStats) const;
+	bool GetCompactingStoreMemoryStats(MemoryStats* apStats) const;
+	unsigned int QTotalPools();
+	unsigned int GetMemoryInThreadStacks();
+	static IMemoryTracker** QTrackerPtr();
+	bool QPoolExists(unsigned int auiPoolIndex) const;
+	bool GetPoolStats(unsigned int auiPoolIndex, MemoryPoolStats* apStats) const;
+	bool GetPoolStats(unsigned int auiPoolIndex, MemoryPoolStats* apStats, unsigned int& aruiMaxConsecutiveFailedAllocCount) const;
+	bool GetPoolContextInfo(unsigned int auiPoolIndex, unsigned int* apInfoDest) const;
+
 	size_t Size(const void* apMem) const;
 	ScrapHeap* GetThreadScrapHeap();
 	IMemoryHeap* GetHeapForPointer(const void* apMem) const;
@@ -71,6 +125,9 @@ public:
 
 protected:
 	MemoryManager();
+	void Initialize();
+	void CreatePoolStore(unsigned int auiAddressRangeSize, unsigned int auiInitialCommit);
+	void CreateCompactingStore(size_t auiSize, unsigned int auiInitialCommit);
 
 	static void UpdateInitState(MemoryManager* apInstanceBuffer, unsigned int* apuiInitFence);
 
@@ -106,6 +163,7 @@ public:
 
 private:
 	// Per thread state of the memory manager.
+	static thread_local bool bAllowCleanCompactingStoreST;
 	static thread_local unsigned int uiThreadInitState;
 	static thread_local bool bThreadAllocationPass;
 	static thread_local unsigned int uiThreadMemoryProblemDepth;
@@ -114,8 +172,12 @@ private:
 	alignas(8) static thread_local unsigned char aThreadScrapHeapBuffer[sizeof(ThreadScrapHeap)];
 };
 static_assert(sizeof(MemoryManager) == 0x480);
+static_assert(offsetof(MemoryManager, ppHeaps) == 0x8);
+static_assert(offsetof(MemoryManager, pHeapsByContextA) == 0x18);
 static_assert(offsetof(MemoryManager, pThreadScrapHeap) == 0x410);
+static_assert(offsetof(MemoryManager, ppPhysicalHeaps) == 0x418);
 static_assert(offsetof(MemoryManager, pSmallBlockAllocator) == 0x430);
+static_assert(offsetof(MemoryManager, pCompactingStore) == 0x438);
 static_assert(offsetof(MemoryManager, bAllowPoolUse) == 0x449);
 static_assert(offsetof(MemoryManager, iAlignmentForPools) == 0x460);
 static_assert(offsetof(MemoryManager, iFailedAllocationSize) == 0x468);
