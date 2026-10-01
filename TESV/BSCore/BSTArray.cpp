@@ -11,6 +11,9 @@ BSTArrayBase::BSTArrayBase() : iSize(0)
 
 BSTArrayBase::~BSTArrayBase() = default;
 
+BSTArrayHeapAllocator::~BSTArrayHeapAllocator() = default;
+BSTAlignedHeapArrayAllocatorBase::~BSTAlignedHeapArrayAllocatorBase() = default;
+
 void BSTArrayBase::MoveItems(void* apBuffer, unsigned int auiTo, unsigned int auiFrom, unsigned int auiCount, unsigned int auiElemSize)
 {
 	unsigned int uiBytes = auiCount * auiElemSize;
