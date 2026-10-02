@@ -2,6 +2,7 @@
 #include "NiStreamMacros.h"
 #include "NiObjectGroup.h"
 #include "NiRTTI.h"
+#include "Gamebryo/CoreLibs/NiSystem/NiThread.h"
 #include "Gamebryo/CoreLibs/NiSystem/NiThreadProcedure.h"
 #include "BSCore/MemoryManager.h"
 #include "Gamebryo/CoreLibs/NiSystem/NiMemoryDefines.h"
@@ -13,8 +14,8 @@
 #include <cstdlib>
 #include <new>
 
-thread_local BSScrapArray<uint32_t>* pLinkIDAS = nullptr;
-thread_local BSScrapArray<uint32_t>* pLinkIDBlocksAS = nullptr;
+thread_local constinit BSScrapArray<uint32_t>* pLinkIDAS = nullptr;
+thread_local constinit BSScrapArray<uint32_t>* pLinkIDBlocksAS = nullptr;
 
 bool NiStream::Load(NiBinaryStream* pkIstr)
 {
@@ -1032,4 +1033,159 @@ NiStream::~NiStream()
 	delete m_pkOstr;
 	RemoveAllObjects();
 	delete static_cast<NiThreadProcedure*>(m_pkBackgroundLoadProcedure);
+}
+
+void NiStream::_SDMInit()
+{
+	void* pvLoaders = MemoryManager::Instance().Allocate(sizeof(*ms_pkLoaders), 0, false);
+	ms_pkLoaders = pvLoaders ? new (pvLoaders) NiTStringPointerMap<LoadFunction>(59, false) : nullptr;
+	void* pvFunctions = MemoryManager::Instance().Allocate(sizeof(*ms_pkPostProcessFunctions), 0, false);
+	ms_pkPostProcessFunctions = pvFunctions ? new (pvFunctions) NiTPrimitiveArray<PostProcessFunction>(0, 3) : nullptr;
+	bUseDefaultPath = true;
+}
+
+void NiStream::_SDMShutdown()
+{
+	delete ms_pkLoaders;
+	delete ms_pkPostProcessFunctions;
+}
+
+void NiStream::BackgroundLoad()
+{
+	m_bBackgroundLoadResult = m_pkIstr ? LoadStream() : Load(m_acFileName);
+	BackgroundLoadOnExit();
+	InterlockedIncrement(&m_kSemaphore.m_iCount);
+	ReleaseSemaphore(m_kSemaphore.m_hSemaphore, 1, nullptr);
+}
+
+void NiStream::BackgroundLoadBegin(const char* pcFileName)
+{
+	m_pkIstr = nullptr;
+	strcpy_s(m_acFileName, sizeof(m_acFileName), pcFileName);
+	BackgroundLoadBegin();
+}
+
+void NiStream::BackgroundLoadBegin(NiBinaryStream* pkIstr)
+{
+	m_pkIstr = pkIstr;
+	BackgroundLoadBegin();
+}
+
+NiStream::ThreadStatus NiStream::BackgroundLoadPoll(LoadState* pkState)
+{
+	if (m_uiBackgroundLoadStatus - 1 <= 1 && m_kSemaphore.m_iCount > 0)
+	{
+		if (WaitForSingleObject(m_kSemaphore.m_hSemaphore, INFINITE) != WAIT_TIMEOUT)
+			InterlockedDecrement(&m_kSemaphore.m_iCount);
+		delete m_pkThread;
+		m_pkThread = nullptr;
+		m_uiBackgroundLoadStatus = IDLE;
+	}
+	ThreadStatus eStatus = static_cast<ThreadStatus>(m_uiBackgroundLoadStatus);
+	if (pkState && (eStatus == LOADING || eStatus == PAUSED))
+	{
+		if (m_uiLoad == 0xffffffff)
+			pkState->m_fReadProgress = pkState->m_fLinkProgress = 0.0f;
+		else
+		{
+			uint32_t uiObjects = m_kObjects.m_uiMaxSize;
+			pkState->m_fReadProgress = static_cast<float>(m_uiLoad) / static_cast<float>(uiObjects);
+			pkState->m_fLinkProgress = static_cast<float>(m_uiLink + m_uiPostLink) / static_cast<float>(2 * uiObjects);
+		}
+		return static_cast<ThreadStatus>(m_uiBackgroundLoadStatus);
+	}
+	return eStatus;
+}
+
+void NiStream::BackgroundLoadPause()
+{
+	m_uiBackgroundLoadStatus = PAUSED;
+	m_pkThread->Suspend();
+}
+
+void NiStream::BackgroundLoadResume()
+{
+	if (m_uiBackgroundLoadStatus == PAUSED)
+	{
+		m_pkThread->Resume();
+		m_uiBackgroundLoadStatus = LOADING;
+	}
+}
+
+void NiStream::BackgroundLoadCancel()
+{
+	if (m_uiBackgroundLoadStatus == PAUSED)
+	{
+		m_pkThread->Resume();
+		m_uiBackgroundLoadStatus = CANCELLING;
+	}
+	else if (m_uiBackgroundLoadStatus == LOADING)
+		m_uiBackgroundLoadStatus = CANCELLING;
+}
+
+bool NiStream::BackgroundLoadFinish()
+{
+	if (m_uiBackgroundLoadStatus == PAUSED)
+	{
+		m_pkThread->Resume();
+		m_uiBackgroundLoadStatus = LOADING;
+	}
+	else if (m_uiBackgroundLoadStatus - 1 > 1)
+		return m_bBackgroundLoadResult;
+	if (WaitForSingleObject(m_kSemaphore.m_hSemaphore, INFINITE) != WAIT_TIMEOUT)
+		InterlockedDecrement(&m_kSemaphore.m_iCount);
+	delete m_pkThread;
+	m_pkThread = nullptr;
+	m_uiBackgroundLoadStatus = IDLE;
+	return m_bBackgroundLoadResult;
+}
+
+void NiStream::BackgroundLoadCleanup()
+{
+	delete m_pkThread;
+	m_uiBackgroundLoadStatus = IDLE;
+	m_pkThread = nullptr;
+}
+
+unsigned int NiStream::BackgroundLoadProcedure::ThreadProcedure(void*)
+{
+	NiStream* pkStream = m_pkStream;
+	pkStream->m_bBackgroundLoadResult = pkStream->m_pkIstr ? pkStream->LoadStream() : pkStream->Load(pkStream->m_acFileName);
+	pkStream->BackgroundLoadOnExit();
+	InterlockedIncrement(&m_kSemaphore.m_iCount);
+	ReleaseSemaphore(m_kSemaphore.m_hSemaphore, 1, nullptr);
+	return 0;
+}
+
+void NiStream::BackgroundLoadBegin()
+{
+	m_uiLoad = 0xffffffff;
+	NiThreadProcedure* pkProcedure = static_cast<NiThreadProcedure*>(m_pkBackgroundLoadProcedure);
+	if (!pkProcedure)
+	{
+		void* pvProcedure = MemoryManager::Instance().Allocate(sizeof(BackgroundLoadProcedure), 0, false);
+		pkProcedure = pvProcedure ? new (pvProcedure) BackgroundLoadProcedure(this) : nullptr;
+		m_pkBackgroundLoadProcedure = pkProcedure;
+	}
+	NiThread* pkThread = NiThread::Create(pkProcedure, 0xffffffff);
+	m_pkThread = pkThread;
+	NiProcessorAffinity kAffinity{4, 12};
+	if (pkThread->SystemSetAffinity(kAffinity))
+		pkThread->m_kAffinity = kAffinity;
+	if (m_acFileName[0])
+	{
+		pkThread = m_pkThread;
+		_NiFree(pkThread->m_pcName);
+		if (m_acFileName[0])
+		{
+			size_t stLength = std::strlen(m_acFileName);
+			pkThread->m_pcName = static_cast<char*>(_NiMalloc(stLength + 1));
+			strncpy_s(pkThread->m_pcName, stLength + 1, m_acFileName, stLength);
+			pkThread->m_pcName[stLength] = 0;
+			SetThreadName(pkThread->m_uiThreadID, stLength <= 4 ? "NiThread" : pkThread->m_pcName);
+		}
+	}
+	m_pkThread->SetPriority(static_cast<NiThread::Priority>(m_uiBackgroundLoadPriority));
+	m_pkThread->Resume();
+	m_uiBackgroundLoadStatus = LOADING;
 }

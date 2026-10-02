@@ -9,6 +9,8 @@
 #include "NiTPointerMap.h"
 #include "NiTStringMap.h"
 #include "NiTArray.h"
+#include "Gamebryo/CoreLibs/NiSystem/NiSemaphore.h"
+#include "Gamebryo/CoreLibs/NiSystem/NiThreadProcedure.h"
 #include <windows.h>
 #include <cstddef>
 #include <cstdint>
@@ -17,6 +19,7 @@ class NiBinaryStream;
 class NiSearchPath;
 class NiThread;
 class NiTexture;
+class NiAVObject;
 
 struct BSStreamHeader
 {
@@ -52,6 +55,32 @@ public:
 	virtual uint32_t GetLinkIDFromObject(const NiObject* pkObject) const;
 	virtual void SaveLinkID(const NiObject* pkObject);
 
+	enum ThreadStatus { IDLE, LOADING, CANCELLING, PAUSING, PAUSED };
+	class LoadState
+	{
+	public:
+		float m_fReadProgress;
+		float m_fLinkProgress;
+	};
+	class BackgroundLoadProcedure : public NiThreadProcedure
+	{
+	public:
+		BackgroundLoadProcedure(NiStream* pkStream) : m_pkStream(pkStream) {}
+		unsigned int ThreadProcedure(void* pvArg) override;
+		NiStream* m_pkStream;
+	};
+	void BackgroundLoad();
+	void BackgroundLoadBegin(const char* pcFileName);
+	void BackgroundLoadBegin(NiBinaryStream* pkIstr);
+	ThreadStatus BackgroundLoadPoll(LoadState* pkState);
+	void BackgroundLoadPause();
+	void BackgroundLoadResume();
+	void BackgroundLoadCancel();
+	bool BackgroundLoadFinish();
+	void BackgroundLoadCleanup();
+
+	static void _SDMInit();
+	static void _SDMShutdown();
 	static int RegisterLoader(const char* pcRTTI, LoadFunction pfnLoad);
 	static void UnregisterLoader(const char* pcRTTI);
 	static NiObject* CreateObjectByRTTI(const char* pcRTTI);
@@ -79,6 +108,7 @@ public:
 	NiObjectGroup* GetGroupFromID(uint32_t uiID) const;
 
 protected:
+	void BackgroundLoadBegin();
 	bool LoadRTTI();
 	void SaveRTTI();
 	void LoadObjectGroups();
@@ -86,6 +116,7 @@ protected:
 	void UpdateObjectGroups();
 	void FreeLoadData();
 	void SetSelectiveUpdateFlagsForOldVersions();
+	void SetSelectiveUpdateFlagsTTTFRecursive(NiAVObject* pkObject);
 	void LoadRTTIString(char* pcString);
 	void RTTIError(const char* pcRTTI);
 	void SaveFixedStringTable();
@@ -144,6 +175,7 @@ private:
 	static NiTStringPointerMap<LoadFunction>* ms_pkLoaders;
 	static NiTPrimitiveArray<PostProcessFunction>* ms_pkPostProcessFunctions;
 	static CRITICAL_SECTION ms_kCleanupCriticalSection;
+	static NiSemaphore m_kSemaphore;
 	static const uint32_t ms_uiNifMinVersion;
 	static const uint32_t ms_uiNifMaxVersion;
 	static const uint32_t ms_uiNifMinUserDefinedVersion;
@@ -160,5 +192,7 @@ static_assert(offsetof(NiStream, m_acLastLoadedRTTI) == 780);
 static_assert(offsetof(NiStream, m_uiLastError) == 1040);
 static_assert(offsetof(NiStream, m_acFilePath) == 1304);
 
-extern thread_local BSScrapArray<uint32_t>* pLinkIDAS;
-extern thread_local BSScrapArray<uint32_t>* pLinkIDBlocksAS;
+inline NiSemaphore NiStream::m_kSemaphore;
+
+extern thread_local constinit BSScrapArray<uint32_t>* pLinkIDAS;
+extern thread_local constinit BSScrapArray<uint32_t>* pLinkIDBlocksAS;

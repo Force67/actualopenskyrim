@@ -33,6 +33,7 @@ constexpr DWORD WAIT_OBJECT_0 = 0;
 constexpr DWORD WAIT_TIMEOUT = 258;
 constexpr DWORD WAIT_FAILED = 0xFFFFFFFF;
 
+HANDLE CreateSemaphoreA(void* lpSemaphoreAttributes, LONG lInitialCount, LONG lMaximumCount, const char* lpName);
 HANDLE CreateSemaphoreW(void* lpSemaphoreAttributes, LONG lInitialCount, LONG lMaximumCount, const wchar_t* lpName);
 BOOL ReleaseSemaphore(HANDLE hSemaphore, LONG lReleaseCount, LONG* lpPreviousCount);
 DWORD WaitForSingleObject(HANDLE hHandle, DWORD dwMilliseconds);

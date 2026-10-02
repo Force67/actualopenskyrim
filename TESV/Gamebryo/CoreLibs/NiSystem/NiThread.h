@@ -9,6 +9,7 @@ class NiThreadProcedure;
 
 class NiThread
 {
+	friend class NiStream;
 public:
 	enum Priority
 	{

@@ -186,7 +186,11 @@ namespace
 	}
 	const int processBasePriority = getpriority(PRIO_PROCESS, getpid());
 	std::mutex handleMutex;
-	std::unordered_map<HANDLE, std::shared_ptr<Semaphore>> semaphores;
+	std::unordered_map<HANDLE, std::shared_ptr<Semaphore>>& Semaphores()
+	{
+		static std::unordered_map<HANDLE, std::shared_ptr<Semaphore>> kSemaphores;
+		return kSemaphores;
+	}
 
 	std::shared_ptr<Thread> FindThread(HANDLE handle)
 	{
@@ -198,8 +202,8 @@ namespace
 	std::shared_ptr<Semaphore> FindSemaphore(HANDLE handle)
 	{
 		std::lock_guard lock(handleMutex);
-		const auto it = semaphores.find(handle);
-		return it == semaphores.end() ? nullptr : it->second;
+		const auto it = Semaphores().find(handle);
+		return it == Semaphores().end() ? nullptr : it->second;
 	}
 }
 
@@ -351,8 +355,15 @@ HANDLE CreateSemaphoreW(void*, LONG lInitialCount, LONG lMaximumCount, const wch
 	semaphore->maximum = lMaximumCount;
 	HANDLE handle = semaphore.get();
 	std::lock_guard lock(handleMutex);
-	semaphores.emplace(handle, std::move(semaphore));
+	Semaphores().emplace(handle, std::move(semaphore));
 	return handle;
+}
+
+HANDLE CreateSemaphoreA(void* lpAttributes, LONG lInitialCount, LONG lMaximumCount, const char* lpName)
+{
+	if (lpName)
+		return nullptr;
+	return CreateSemaphoreW(lpAttributes, lInitialCount, lMaximumCount, nullptr);
 }
 
 BOOL ReleaseSemaphore(HANDLE hSemaphore, LONG lReleaseCount, LONG* lpPreviousCount)
@@ -430,7 +441,7 @@ BOOL CloseHandle(HANDLE hObject)
 		return ::close(reinterpret_cast<intptr_t>(hObject)) == 0;
 	}
 	std::lock_guard lock(handleMutex);
-	return semaphores.erase(hObject) != 0 || threads.erase(hObject) != 0;
+	return Semaphores().erase(hObject) != 0 || threads.erase(hObject) != 0;
 }
 
 namespace
