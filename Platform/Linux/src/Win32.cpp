@@ -1304,3 +1304,14 @@ extern "C" int strncpy_s(char* apDest, size_t auiSize, const char* apSource, siz
 	apDest[uiLength] = 0;
 	return bTruncate && apSource[uiLength] ? 80 : 0;
 }
+
+extern "C" char* strtok_s(char* apString, const char* apDelimiters, char** appContext)
+{
+	if (!apDelimiters || !appContext || (!apString && !*appContext))
+	{
+		_invalid_parameter_noinfo();
+		errno = EINVAL;
+		return nullptr;
+	}
+	return strtok_r(apString, apDelimiters, appContext);
+}

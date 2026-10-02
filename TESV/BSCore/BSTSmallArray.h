@@ -24,3 +24,39 @@ public:
 };
 static_assert(sizeof(BSTSmallArrayHeapAllocatorCore) == 0x10);
 static_assert(offsetof(BSTSmallArrayHeapAllocatorCore, Buffer) == 8);
+
+template<unsigned int Size>
+class BSTSmallArrayHeapAllocator
+{
+public:
+	BSTSmallArrayHeapAllocator() { ExtendedBuffer.Core.Initialize(); }
+	bool Allocate(unsigned int uiSize, unsigned int uiElementSize)
+	{
+		return ExtendedBuffer.Core.Allocate(uiSize, uiElementSize, Size);
+	}
+	bool Reallocate(unsigned int uiSize, unsigned int uiFront, unsigned int uiShift, unsigned int uiBack, unsigned int uiElementSize)
+	{
+		return ExtendedBuffer.Core.Reallocate(uiSize, uiFront, uiShift, uiBack, uiElementSize, Size);
+	}
+	void Deallocate() { ExtendedBuffer.Core.Deallocate(); }
+	void* QBuffer() { return ExtendedBuffer.Core.QBuffer(); }
+	const void* QBuffer() const { return ExtendedBuffer.Core.QBuffer(); }
+	unsigned int QAllocSize() const { return ExtendedBuffer.Core.uiAllocSize & 0x7fffffffu; }
+
+	union
+	{
+		BSTSmallArrayHeapAllocatorCore Core;
+		unsigned char BufferSpaceExtension[Size + 8];
+	} ExtendedBuffer;
+};
+
+#include "BSTArray.h"
+
+template<class T, unsigned int Size>
+class BSTSmallArray : public BSTArray<T, BSTSmallArrayHeapAllocator<Size * sizeof(T)>>
+{
+public:
+	explicit BSTSmallArray(unsigned int uiReserveSize = 0) :
+		BSTArray<T, BSTSmallArrayHeapAllocator<Size * sizeof(T)>>(uiReserveSize) {}
+};
+static_assert(sizeof(BSTSmallArray<void*, 4>) == 48);

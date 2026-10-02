@@ -1,4 +1,8 @@
 add_library(nimain STATIC
+  NiStream.cpp
+  NiStreamStatics.cpp
+  NiTMapBase.cpp
+  NiTLargeArray.cpp
   NiRefObject.cpp
   NiExtraData.cpp
   NiObject.cpp
