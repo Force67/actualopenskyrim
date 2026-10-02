@@ -14,9 +14,9 @@ NiFilename::NiFilename(const char* pcFullPath)
 	Splitpath(pcFullPath);
 }
 
-void NiFilename::Splitpath(const char* pcStr)
+int NiFilename::Splitpath(const char* pcStr)
 {
-	_splitpath_s(pcStr, m_acDrive, sizeof(m_acDrive), m_acDir, sizeof(m_acDir), m_acFname, sizeof(m_acFname), m_acExt, sizeof(m_acExt));
+	return _splitpath_s(pcStr, m_acDrive, sizeof(m_acDrive), m_acDir, sizeof(m_acDir), m_acFname, sizeof(m_acFname), m_acExt, sizeof(m_acExt));
 }
 
 bool NiFilename::GetFullPath(char* pcFullPath, unsigned int uiStrLen) const

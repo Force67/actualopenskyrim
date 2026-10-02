@@ -19,6 +19,17 @@ add_library(bscore STATIC
   ../BSSystem/BSStringPoolSingleton.cpp
   ../BSSystem/BSStringPoolDelimited.cpp
   ../BSSystem/BSStringPool.cpp
+  ../BSSystem/BSStorage.cpp
+  ../BSSystem/BSMemStorage.cpp
+  ../BSSystem/BSSystemFile.cpp
+  ../BSSystem/Win32/BSSystemFile_Win32.cpp
+  ../BSSystem/BSStringT.cpp
+  ../BSSystem/FilePathUtilities.cpp
+  ../BSSystem/BSSystemDir.cpp
+  ../BSSystem/Win32/BSSystemDir_Win32.cpp
+  ../BSSystem/BSSearchPath.cpp
+  ../Gamebryo/CoreLibs/NiSystem/NiSearchPath.cpp
+  ../Gamebryo/CoreLibs/NiSystem/Win32/NiFilename.cpp
   BSTSmallArray.cpp
   BSTArray.cpp
   BSRandom.cpp

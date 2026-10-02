@@ -12,6 +12,12 @@
 #include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
+#include <fcntl.h>
+#include <dirent.h>
+#include <fnmatch.h>
+#include <unistd.h>
+
+#include <vector>
 
 DWORD GetFileAttributesA(const char* lpFileName)
 {
@@ -128,6 +134,7 @@ int MessageBoxA(void*, const char* lpText, const char* lpCaption, unsigned int)
 #include <condition_variable>
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace
 {
@@ -389,10 +396,505 @@ DWORD WaitForSingleObject(HANDLE hHandle, DWORD dwMilliseconds)
 	return WAIT_OBJECT_0;
 }
 
+namespace
+{
+	// Only handles handed out by the file API below are descriptors; anything
+	// else belongs to the semaphore and thread tables above.
+	std::mutex fileHandleMutex;
+	std::unordered_set<HANDLE> fileHandles;
+
+	bool IsFileHandle(HANDLE hObject)
+	{
+		std::lock_guard lock(fileHandleMutex);
+		return fileHandles.count(hObject) != 0;
+	}
+
+	void RememberFileHandle(HANDLE hObject)
+	{
+		std::lock_guard lock(fileHandleMutex);
+		fileHandles.insert(hObject);
+	}
+
+	bool ForgetFileHandle(HANDLE hObject)
+	{
+		std::lock_guard lock(fileHandleMutex);
+		return fileHandles.erase(hObject) != 0;
+	}
+}
+
 BOOL CloseHandle(HANDLE hObject)
 {
+	if (IsFileHandle(hObject))
+	{
+		ForgetFileHandle(hObject);
+		return ::close(reinterpret_cast<intptr_t>(hObject)) == 0;
+	}
 	std::lock_guard lock(handleMutex);
 	return semaphores.erase(hObject) != 0 || threads.erase(hObject) != 0;
+}
+
+namespace
+{
+	thread_local DWORD tlastError = NO_ERROR;
+
+	struct Completion
+	{
+		LPOVERLAPPED_COMPLETION_ROUTINE routine;
+		DWORD errorCode;
+		DWORD bytes;
+		OVERLAPPED* overlapped;
+	};
+	thread_local std::vector<Completion> tcompletions;
+
+	DWORD ErrnoToWinError(int iErrno)
+	{
+		switch (iErrno)
+		{
+		case ENOENT:
+			return ERROR_FILE_NOT_FOUND;
+		case ENOTDIR:
+			return ERROR_PATH_NOT_FOUND;
+		case EEXIST:
+			return ERROR_ALREADY_EXISTS;
+		case EACCES:
+		case EPERM:
+		case EROFS:
+			return ERROR_ACCESS_DENIED;
+		default:
+			return ERROR_GEN_FAILURE;
+		}
+	}
+
+	FILETIME TimespecToFileTime(const timespec& ts)
+	{
+		// 100 ns units since 1601-01-01; Unix epoch starts 11644473600 s later.
+		uint64_t uiStamp = static_cast<uint64_t>(ts.tv_sec) * 10000000ULL +
+			static_cast<uint64_t>(ts.tv_nsec) / 100ULL + 116444736000000000ULL;
+		return FILETIME{ static_cast<DWORD>(uiStamp), static_cast<DWORD>(uiStamp >> 32) };
+	}
+
+	timespec FileTimeToTimespec(const FILETIME& ft)
+	{
+		uint64_t uiStamp = (static_cast<uint64_t>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
+		uint64_t uiUnix = uiStamp - 116444736000000000ULL;
+		return timespec{ static_cast<time_t>(uiUnix / 10000000ULL), static_cast<long>(uiUnix % 10000000ULL) * 100 };
+	}
+
+	int FileHandleToFd(HANDLE hFile)
+	{
+		return static_cast<int>(reinterpret_cast<intptr_t>(hFile));
+	}
+
+	off_t OverlappedOffset(const OVERLAPPED& over)
+	{
+		return over.Pointer ? reinterpret_cast<off_t>(over.Pointer) :
+			static_cast<off_t>((static_cast<uint64_t>(over.OffsetHigh) << 32) | over.Offset);
+	}
+}
+
+DWORD GetLastError()
+{
+	return tlastError;
+}
+
+void SetLastError(DWORD dwErrCode)
+{
+	tlastError = dwErrCode;
+}
+
+HANDLE CreateFileA(const char* lpFileName, DWORD dwDesiredAccess, DWORD dwShareMode, void* lpSecurityAttributes,
+	DWORD dwCreationDisposition, DWORD dwFlagsAndAttributes, HANDLE hTemplateFile)
+{
+	int iAccess = 0;
+	if (dwDesiredAccess & GENERIC_READ)
+		iAccess |= O_RDONLY;
+	if (dwDesiredAccess & GENERIC_WRITE)
+		iAccess |= O_WRONLY;
+	if (!iAccess)
+		iAccess = O_RDONLY;
+
+	int iDisposition = 0;
+	switch (dwCreationDisposition)
+	{
+	case CREATE_NEW:
+		iDisposition = O_CREAT | O_EXCL;
+		break;
+	case CREATE_ALWAYS:
+		iDisposition = O_CREAT | O_TRUNC;
+		break;
+	case OPEN_ALWAYS:
+		iDisposition = O_CREAT;
+		break;
+	case TRUNCATE_EXISTING:
+		iDisposition = O_TRUNC;
+		break;
+	default:
+		break;
+	}
+
+	int fd = ::open(lpFileName, iAccess | iDisposition | O_CLOEXEC, 0644);
+	if (fd < 0)
+	{
+		tlastError = ErrnoToWinError(errno);
+		return INVALID_HANDLE_VALUE;
+	}
+	HANDLE hFile = reinterpret_cast<HANDLE>(static_cast<intptr_t>(fd));
+	RememberFileHandle(hFile);
+	return hFile;
+}
+
+BOOL ReadFile(HANDLE hFile, void* lpBuffer, DWORD nNumberOfBytesToRead, DWORD* lpNumberOfBytesRead, LPOVERLAPPED lpOverlapped)
+{
+	int fd = FileHandleToFd(hFile);
+	ssize_t n;
+	if (lpOverlapped)
+		n = ::pread(fd, lpBuffer, nNumberOfBytesToRead, OverlappedOffset(*lpOverlapped));
+	else
+		n = ::read(fd, lpBuffer, nNumberOfBytesToRead);
+	if (n < 0)
+	{
+		tlastError = ErrnoToWinError(errno);
+		return FALSE;
+	}
+	if (lpNumberOfBytesRead)
+		*lpNumberOfBytesRead = static_cast<DWORD>(n);
+	return TRUE;
+}
+
+BOOL WriteFile(HANDLE hFile, const void* lpBuffer, DWORD nNumberOfBytesToWrite, DWORD* lpNumberOfBytesWritten, LPOVERLAPPED lpOverlapped)
+{
+	int fd = FileHandleToFd(hFile);
+	ssize_t n;
+	if (lpOverlapped)
+		n = ::pwrite(fd, lpBuffer, nNumberOfBytesToWrite, OverlappedOffset(*lpOverlapped));
+	else
+		n = ::write(fd, lpBuffer, nNumberOfBytesToWrite);
+	if (n < 0)
+	{
+		tlastError = ErrnoToWinError(errno);
+		return FALSE;
+	}
+	if (lpNumberOfBytesWritten)
+		*lpNumberOfBytesWritten = static_cast<DWORD>(n);
+	return TRUE;
+}
+
+BOOL ReadFileEx(HANDLE hFile, void* lpBuffer, DWORD nNumberOfBytesToRead, LPOVERLAPPED lpOverlapped,
+	LPOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine)
+{
+	int fd = FileHandleToFd(hFile);
+	ssize_t n = ::pread(fd, lpBuffer, nNumberOfBytesToRead, OverlappedOffset(*lpOverlapped));
+	if (n < 0)
+	{
+		tlastError = ErrnoToWinError(errno);
+		return FALSE;
+	}
+	tcompletions.push_back({ lpCompletionRoutine, NO_ERROR, static_cast<DWORD>(n), lpOverlapped });
+	return TRUE;
+}
+
+BOOL WriteFileEx(HANDLE hFile, const void* lpBuffer, DWORD nNumberOfBytesToWrite, LPOVERLAPPED lpOverlapped,
+	LPOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine)
+{
+	int fd = FileHandleToFd(hFile);
+	ssize_t n = ::pwrite(fd, lpBuffer, nNumberOfBytesToWrite, OverlappedOffset(*lpOverlapped));
+	if (n < 0)
+	{
+		tlastError = ErrnoToWinError(errno);
+		return FALSE;
+	}
+	tcompletions.push_back({ lpCompletionRoutine, NO_ERROR, static_cast<DWORD>(n), lpOverlapped });
+	return TRUE;
+}
+
+BOOL SetFilePointerEx(HANDLE hFile, LARGE_INTEGER liDistanceToMove, LARGE_INTEGER* lpNewFilePointer, DWORD dwMoveMethod)
+{
+	int fd = FileHandleToFd(hFile);
+	int iWhence = dwMoveMethod == FILE_END ? SEEK_END : dwMoveMethod == FILE_CURRENT ? SEEK_CUR : SEEK_SET;
+	off_t pos = ::lseek(fd, liDistanceToMove.QuadPart, iWhence);
+	if (pos < 0)
+	{
+		tlastError = ErrnoToWinError(errno);
+		return FALSE;
+	}
+	if (lpNewFilePointer)
+		lpNewFilePointer->QuadPart = pos;
+	return TRUE;
+}
+
+BOOL GetFileSizeEx(HANDLE hFile, LARGE_INTEGER* lpFileSize)
+{
+	struct stat st;
+	if (::fstat(FileHandleToFd(hFile), &st) != 0)
+	{
+		tlastError = ErrnoToWinError(errno);
+		return FALSE;
+	}
+	lpFileSize->QuadPart = st.st_size;
+	return TRUE;
+}
+
+BOOL SetEndOfFile(HANDLE hFile)
+{
+	int fd = FileHandleToFd(hFile);
+	off_t pos = ::lseek(fd, 0, SEEK_CUR);
+	if (pos < 0 || ::ftruncate(fd, pos) != 0)
+	{
+		tlastError = ErrnoToWinError(errno);
+		return FALSE;
+	}
+	return TRUE;
+}
+
+BOOL FlushFileBuffers(HANDLE hFile)
+{
+	if (::fsync(FileHandleToFd(hFile)) != 0)
+	{
+		tlastError = ErrnoToWinError(errno);
+		return FALSE;
+	}
+	return TRUE;
+}
+
+BOOL GetFileTime(HANDLE hFile, FILETIME* lpCreationTime, FILETIME* lpLastAccessTime, FILETIME* lpLastWriteTime)
+{
+	struct stat st;
+	if (::fstat(FileHandleToFd(hFile), &st) != 0)
+	{
+		tlastError = ErrnoToWinError(errno);
+		return FALSE;
+	}
+	if (lpLastAccessTime)
+		*lpLastAccessTime = TimespecToFileTime(st.st_atim);
+	if (lpLastWriteTime)
+		*lpLastWriteTime = TimespecToFileTime(st.st_mtim);
+	if (lpCreationTime)
+		*lpCreationTime = TimespecToFileTime(st.st_ctim);
+	return TRUE;
+}
+
+BOOL SetFileTime(HANDLE hFile, const FILETIME* lpCreationTime, const FILETIME* lpLastAccessTime, const FILETIME* lpLastWriteTime)
+{
+	timespec times[2];
+	times[0] = lpLastAccessTime ? FileTimeToTimespec(*lpLastAccessTime) : timespec{ UTIME_NOW, 0 };
+	times[1] = lpLastWriteTime ? FileTimeToTimespec(*lpLastWriteTime) : timespec{ UTIME_NOW, 0 };
+	if (::futimens(FileHandleToFd(hFile), times) != 0)
+	{
+		tlastError = ErrnoToWinError(errno);
+		return FALSE;
+	}
+	return TRUE;
+}
+
+BOOL DeleteFileA(const char* lpFileName)
+{
+	if (::unlink(lpFileName) != 0)
+	{
+		tlastError = ErrnoToWinError(errno);
+		return FALSE;
+	}
+	return TRUE;
+}
+
+BOOL CopyFileA(const char* lpExistingFileName, const char* lpNewFileName, BOOL bFailIfExists)
+{
+	if (bFailIfExists && ::access(lpNewFileName, F_OK) == 0)
+	{
+		tlastError = ERROR_ALREADY_EXISTS;
+		return FALSE;
+	}
+	int src = ::open(lpExistingFileName, O_RDONLY | O_CLOEXEC);
+	if (src < 0)
+	{
+		tlastError = ErrnoToWinError(errno);
+		return FALSE;
+	}
+	int dst = ::open(lpNewFileName, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+	if (dst < 0)
+	{
+		tlastError = ErrnoToWinError(errno);
+		::close(src);
+		return FALSE;
+	}
+	char buf[4096];
+	BOOL bOk = TRUE;
+	ssize_t n;
+	while ((n = ::read(src, buf, sizeof(buf))) > 0)
+	{
+		ssize_t written = 0;
+		while (written < n)
+		{
+			ssize_t w = ::write(dst, buf + written, n - written);
+			if (w < 0)
+			{
+				bOk = FALSE;
+				break;
+			}
+			written += w;
+		}
+		if (!bOk)
+			break;
+	}
+	if (n < 0)
+		bOk = FALSE;
+	::close(src);
+	::close(dst);
+	if (!bOk)
+		tlastError = ErrnoToWinError(errno);
+	return bOk;
+}
+
+BOOL MoveFileA(const char* lpExistingFileName, const char* lpNewFileName)
+{
+	if (::rename(lpExistingFileName, lpNewFileName) != 0)
+	{
+		tlastError = ErrnoToWinError(errno);
+		return FALSE;
+	}
+	return TRUE;
+}
+
+DWORD SleepEx(DWORD dwMilliseconds, BOOL bAlertable)
+{
+	if (bAlertable)
+	{
+		while (!tcompletions.empty())
+		{
+			Completion completion = tcompletions.back();
+			tcompletions.pop_back();
+			completion.routine(completion.errorCode, completion.bytes, completion.overlapped);
+		}
+	}
+	Sleep(dwMilliseconds);
+	return 0;
+}
+
+namespace
+{
+	struct FindState
+	{
+		DIR* pDir;
+		char sDirectory[1024];
+		char sPattern[256];
+	};
+
+	void FillFindData(const char* sPath, const char* sName, WIN32_FIND_DATAA* pFind)
+	{
+		memset(pFind, 0, sizeof(*pFind));
+		struct stat st;
+		if (::stat(sPath, &st) == 0)
+		{
+			if (S_ISDIR(st.st_mode))
+				pFind->dwFileAttributes = FILE_ATTRIBUTE_DIRECTORY;
+			else
+				pFind->dwFileAttributes = FILE_ATTRIBUTE_ARCHIVE;
+			pFind->nFileSizeHigh = static_cast<DWORD>(st.st_size >> 32);
+			pFind->nFileSizeLow = static_cast<DWORD>(st.st_size);
+			pFind->ftCreationTime = TimespecToFileTime(st.st_ctim);
+			pFind->ftLastAccessTime = TimespecToFileTime(st.st_atim);
+			pFind->ftLastWriteTime = TimespecToFileTime(st.st_mtim);
+		}
+		else
+		{
+			pFind->dwFileAttributes = FILE_ATTRIBUTE_NORMAL;
+		}
+		strcpy(pFind->cFileName, sName);
+	}
+}
+
+HANDLE FindFirstFileA(const char* lpFileName, WIN32_FIND_DATAA* lpFindFileData)
+{
+	const char* sSlash = strrchr(lpFileName, '/');
+	const char* sBackslash = strrchr(lpFileName, '\\');
+	const char* sSplit = sSlash > sBackslash ? sSlash : sBackslash;
+	char sDirectory[1024];
+	const char* sPattern;
+	if (sSplit)
+	{
+		size_t uDirLen = sSplit - lpFileName;
+		if (uDirLen >= sizeof(sDirectory))
+			uDirLen = sizeof(sDirectory) - 1;
+		memcpy(sDirectory, lpFileName, uDirLen);
+		sDirectory[uDirLen] = 0;
+		sPattern = sSplit + 1;
+	}
+	else
+	{
+		strcpy(sDirectory, ".");
+		sPattern = lpFileName;
+	}
+	if (!*sPattern)
+		sPattern = "*";
+
+	DIR* pDir = ::opendir(*sDirectory ? sDirectory : ".");
+	if (!pDir)
+	{
+		tlastError = ErrnoToWinError(errno);
+		return INVALID_HANDLE_VALUE;
+	}
+
+	auto* pState = new FindState;
+	pState->pDir = pDir;
+	strncpy(pState->sDirectory, *sDirectory ? sDirectory : ".", sizeof(pState->sDirectory) - 1);
+	pState->sDirectory[sizeof(pState->sDirectory) - 1] = 0;
+	strncpy(pState->sPattern, sPattern, sizeof(pState->sPattern) - 1);
+	pState->sPattern[sizeof(pState->sPattern) - 1] = 0;
+
+	char sPath[2048];
+	while (dirent* pEntry = ::readdir(pDir))
+	{
+		if (!strcmp(pEntry->d_name, ".") || !strcmp(pEntry->d_name, ".."))
+			continue;
+		if (fnmatch(sPattern, pEntry->d_name, FNM_CASEFOLD) != 0)
+			continue;
+		snprintf(sPath, sizeof(sPath), "%s/%s", pState->sDirectory, pEntry->d_name);
+		FillFindData(sPath, pEntry->d_name, lpFindFileData);
+		return pState;
+	}
+	::closedir(pDir);
+	delete pState;
+	tlastError = ERROR_FILE_NOT_FOUND;
+	return INVALID_HANDLE_VALUE;
+}
+
+BOOL FindNextFileA(HANDLE hFindFile, WIN32_FIND_DATAA* lpFindFileData)
+{
+	auto* pState = static_cast<FindState*>(hFindFile);
+	if (!pState)
+		return FALSE;
+	char sPath[2048];
+	while (dirent* pEntry = ::readdir(pState->pDir))
+	{
+		if (!strcmp(pEntry->d_name, ".") || !strcmp(pEntry->d_name, ".."))
+			continue;
+		if (fnmatch(pState->sPattern, pEntry->d_name, FNM_CASEFOLD) != 0)
+			continue;
+		snprintf(sPath, sizeof(sPath), "%s/%s", pState->sDirectory, pEntry->d_name);
+		FillFindData(sPath, pEntry->d_name, lpFindFileData);
+		return TRUE;
+	}
+	tlastError = ERROR_NO_MORE_FILES;
+	return FALSE;
+}
+
+BOOL FindClose(HANDLE hFindFile)
+{
+	auto* pState = static_cast<FindState*>(hFindFile);
+	if (!pState)
+		return FALSE;
+	::closedir(pState->pDir);
+	delete pState;
+	return TRUE;
+}
+
+BOOL CreateDirectoryA(const char* lpPathName, void* lpSecurityAttributes)
+{
+	if (::mkdir(lpPathName, 0755) != 0)
+	{
+		tlastError = ErrnoToWinError(errno);
+		return FALSE;
+	}
+	return TRUE;
 }
 #include <sys/mman.h>
 

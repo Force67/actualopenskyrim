@@ -10,9 +10,11 @@ public:
 	bool GetFullPath(char* pcFullPath, unsigned int uiStrLen) const;
 	void SetFilename(const char* pcFilename) { strcpy_s(m_acFname, sizeof(m_acFname), pcFilename); }
 	void SetExt(const char* pcExt) { strcpy_s(m_acExt, sizeof(m_acExt), pcExt); }
+	int Splitpath(const char* pcStr);
 
 private:
-	void Splitpath(const char* pcStr);
+	friend class NiSearchPath;
+
 	bool Makepath(char* pcStr, size_t stStrLen) const;
 
 	char m_acDir[256];

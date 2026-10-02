@@ -18,3 +18,22 @@ void BSmemcpy(void* apDestination, size_t auiDestinationSize, const void* apSour
 	*_errno() = apDestination && apSource ? ERANGE : EINVAL;
 	_invalid_parameter_noinfo();
 }
+
+void BSmemmove(void* apDestination, size_t auiDestinationSize, const void* apSource, size_t auiCount)
+{
+	if (!auiCount)
+		return;
+	if (!apDestination || !apSource)
+	{
+		*_errno() = EINVAL;
+		_invalid_parameter_noinfo();
+		return;
+	}
+	if (auiDestinationSize < auiCount)
+	{
+		*_errno() = ERANGE;
+		_invalid_parameter_noinfo();
+		return;
+	}
+	std::memmove(apDestination, apSource, auiCount);
+}

@@ -1,5 +1,8 @@
 #pragma once
 
+#include <stdlib.h>
+#include <string.h>
+
 // The subset of the Win32 API the engine uses, implemented for Linux. Engine
 // code keeps calling Win32 as the original does; this header grows as more of
 // it is ported.
@@ -14,6 +17,8 @@ using BOOL = int;
 using DWORD = uint32_t;
 using LONG = int32_t;
 #define WINAPI
+constexpr BOOL TRUE = 1;
+constexpr BOOL FALSE = 0;
 
 using HANDLE = void*;
 using ULONG_PTR = uintptr_t;
@@ -98,6 +103,83 @@ inline void* InterlockedCompareExchangePointer(void* volatile* Destination, void
 	return Comperand;
 }
 
+// File API subset; file handles are file descriptors, INVALID_HANDLE_VALUE is
+// the only invalid marker.
+inline HANDLE INVALID_HANDLE_VALUE = reinterpret_cast<HANDLE>(-1);
+
+constexpr DWORD GENERIC_READ = 0x80000000;
+constexpr DWORD GENERIC_WRITE = 0x40000000;
+constexpr DWORD FILE_SHARE_READ = 0x1;
+
+constexpr DWORD CREATE_NEW = 1;
+constexpr DWORD CREATE_ALWAYS = 2;
+constexpr DWORD OPEN_EXISTING = 3;
+constexpr DWORD OPEN_ALWAYS = 4;
+constexpr DWORD TRUNCATE_EXISTING = 5;
+
+constexpr DWORD FILE_FLAG_WRITE_THROUGH = 0x80000000;
+constexpr DWORD FILE_FLAG_NO_BUFFERING = 0x20000000;
+constexpr DWORD FILE_FLAG_OVERLAPPED = 0x40000000;
+constexpr DWORD FILE_FLAG_SEQUENTIAL_SCAN = 0x08000000;
+
+constexpr DWORD FILE_BEGIN = 0;
+constexpr DWORD FILE_CURRENT = 1;
+constexpr DWORD FILE_END = 2;
+
+constexpr DWORD NO_ERROR = 0;
+constexpr DWORD ERROR_FILE_NOT_FOUND = 2;
+constexpr DWORD ERROR_PATH_NOT_FOUND = 3;
+constexpr DWORD ERROR_ACCESS_DENIED = 5;
+constexpr DWORD ERROR_WRITE_PROTECT = 19;
+constexpr DWORD ERROR_ALREADY_EXISTS = 183;
+constexpr DWORD ERROR_GEN_FAILURE = 31;
+
+struct FILETIME
+{
+	DWORD dwLowDateTime;
+	DWORD dwHighDateTime;
+};
+
+struct OVERLAPPED
+{
+	uintptr_t Internal;
+	uintptr_t InternalHigh;
+	union
+	{
+		struct
+		{
+			DWORD Offset;
+			DWORD OffsetHigh;
+		};
+		void* Pointer;
+	};
+	HANDLE hEvent;
+};
+using LPOVERLAPPED = OVERLAPPED*;
+using LPOVERLAPPED_COMPLETION_ROUTINE = void (*)(DWORD dwErrorCode, DWORD dwNumberOfBytesTransfered, LPOVERLAPPED lpOverlapped);
+
+DWORD GetLastError();
+void SetLastError(DWORD dwErrCode);
+HANDLE CreateFileA(const char* lpFileName, DWORD dwDesiredAccess, DWORD dwShareMode, void* lpSecurityAttributes,
+	DWORD dwCreationDisposition, DWORD dwFlagsAndAttributes, HANDLE hTemplateFile);
+BOOL ReadFile(HANDLE hFile, void* lpBuffer, DWORD nNumberOfBytesToRead, DWORD* lpNumberOfBytesRead, LPOVERLAPPED lpOverlapped);
+BOOL WriteFile(HANDLE hFile, const void* lpBuffer, DWORD nNumberOfBytesToWrite, DWORD* lpNumberOfBytesWritten, LPOVERLAPPED lpOverlapped);
+BOOL ReadFileEx(HANDLE hFile, void* lpBuffer, DWORD nNumberOfBytesToRead, LPOVERLAPPED lpOverlapped,
+	LPOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine);
+BOOL WriteFileEx(HANDLE hFile, const void* lpBuffer, DWORD nNumberOfBytesToWrite, LPOVERLAPPED lpOverlapped,
+	LPOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine);
+BOOL SetFilePointerEx(HANDLE hFile, LARGE_INTEGER liDistanceToMove, LARGE_INTEGER* lpNewFilePointer, DWORD dwMoveMethod);
+BOOL GetFileSizeEx(HANDLE hFile, LARGE_INTEGER* lpFileSize);
+BOOL SetEndOfFile(HANDLE hFile);
+BOOL FlushFileBuffers(HANDLE hFile);
+BOOL GetFileTime(HANDLE hFile, FILETIME* lpCreationTime, FILETIME* lpLastAccessTime, FILETIME* lpLastWriteTime);
+BOOL SetFileTime(HANDLE hFile, const FILETIME* lpCreationTime, const FILETIME* lpLastAccessTime, const FILETIME* lpLastWriteTime);
+BOOL DeleteFileA(const char* lpFileName);
+BOOL CopyFileA(const char* lpExistingFileName, const char* lpNewFileName, BOOL bFailIfExists);
+BOOL MoveFileA(const char* lpExistingFileName, const char* lpNewFileName);
+DWORD SleepEx(DWORD dwMilliseconds, BOOL bAlertable);
+
+
 // Memory status and message boxes; the engine only uses these at startup.
 struct MEMORYSTATUSEX
 {
@@ -117,6 +199,35 @@ DWORD GetTickCount();
 
 constexpr unsigned int MB_ICONERROR = 0x10;
 int MessageBoxA(void* hWnd, const char* lpText, const char* lpCaption, unsigned int uType);
+
+constexpr DWORD FILE_ATTRIBUTE_READONLY = 0x1;
+constexpr DWORD FILE_ATTRIBUTE_HIDDEN = 0x2;
+constexpr DWORD FILE_ATTRIBUTE_SYSTEM = 0x4;
+constexpr DWORD FILE_ATTRIBUTE_DIRECTORY = 0x10;
+constexpr DWORD FILE_ATTRIBUTE_ARCHIVE = 0x20;
+constexpr DWORD FILE_ATTRIBUTE_NORMAL = 0x80;
+
+constexpr DWORD ERROR_NO_MORE_FILES = 18;
+
+struct WIN32_FIND_DATAA
+{
+	DWORD dwFileAttributes;
+	FILETIME ftCreationTime;
+	FILETIME ftLastAccessTime;
+	FILETIME ftLastWriteTime;
+	DWORD nFileSizeHigh;
+	DWORD nFileSizeLow;
+	DWORD dwReserved0;
+	DWORD dwReserved1;
+	char cFileName[260];
+	char cAlternateFileName[14];
+};
+using LPWIN32_FIND_DATAA = WIN32_FIND_DATAA*;
+
+HANDLE FindFirstFileA(const char* lpFileName, LPWIN32_FIND_DATAA lpFindFileData);
+BOOL FindNextFileA(HANDLE hFindFile, LPWIN32_FIND_DATAA lpFindFileData);
+BOOL FindClose(HANDLE hFindFile);
+BOOL CreateDirectoryA(const char* lpPathName, void* lpSecurityAttributes);
 
 // MSVC CRT functions the engine calls.
 int64_t _time64(int64_t* apTime);
@@ -223,9 +334,5 @@ static_assert(sizeof(SYSTEM_INFO) == 48);
 void GetSystemInfo(SYSTEM_INFO* lpSystemInfo);
 
 constexpr DWORD INVALID_FILE_ATTRIBUTES = 0xFFFFFFFF;
-constexpr DWORD FILE_ATTRIBUTE_READONLY = 1;
-constexpr DWORD FILE_ATTRIBUTE_HIDDEN = 2;
-constexpr DWORD FILE_ATTRIBUTE_DIRECTORY = 0x10;
-constexpr DWORD FILE_ATTRIBUTE_NORMAL = 0x80;
 constexpr DWORD FILE_ATTRIBUTE_REPARSE_POINT = 0x400;
 DWORD GetFileAttributesA(const char* lpFileName);
