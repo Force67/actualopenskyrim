@@ -135,11 +135,11 @@ constexpr DWORD ERROR_WRITE_PROTECT = 19;
 constexpr DWORD ERROR_ALREADY_EXISTS = 183;
 constexpr DWORD ERROR_GEN_FAILURE = 31;
 
-struct FILETIME
+typedef struct _FILETIME
 {
 	DWORD dwLowDateTime;
 	DWORD dwHighDateTime;
-};
+} FILETIME, *LPFILETIME;
 
 typedef struct _SYSTEMTIME
 {

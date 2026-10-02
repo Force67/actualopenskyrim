@@ -34,6 +34,7 @@ public:
 	virtual uint32_t WriteF(const void* pvBuffer, uint32_t uiBytes);
 
 	void Close();
+	char* FileName() { return pFileName; }
 	bool ChangeBufferSize(uint32_t auiNewSize);
 	_SYSTEMTIME GetLastSaveTime();
 
