@@ -5,15 +5,12 @@
 #include <emmintrin.h>
 #include <windows.h>
 
-// A reentrant spin lock. Inlined everywhere; there are no out-of-line copies.
+// A reentrant spin lock.
 class BSSpinLock
 {
 public:
-	BSSpinLock() :
-		OwningThread(0),
-		uiLockCount(0)
-	{
-	}
+	BSSpinLock();
+	~BSSpinLock();
 
 	void Lock()
 	{

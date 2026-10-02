@@ -1,5 +1,6 @@
 #include "BSCore/CompactingStore.h"
 #include "BSCore/BSCoreUtils.h"
+#include <cstdlib>
 #include <cstring>
 #include <windows.h>
 

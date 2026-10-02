@@ -41,6 +41,12 @@ namespace BSStringPool
 	static_assert(offsetof(BucketTable, kLocks) == 0x80000);
 	static_assert(offsetof(BucketTable, bInitialized) == 0x80100);
 
+	extern unsigned char cBucketTableS[sizeof(BucketTable)];
+	extern int iBucketTableInitS;
+	void DestroyBucketTable();
+
+	extern thread_local constinit unsigned char cDelimiterPrefixST[104];
+	extern thread_local constinit unsigned char cDelimiterLookupST[140];
 	extern const std::array<uint16_t, 256> CRCTable;
 	unsigned int GenerateCRC(unsigned int& arCRC, char*& arString, char*& arNext, char* apSource, const char* apDelimiters);
 	void GetEntry(Entry*& arEntry, const char* apString, unsigned int auiCRC, unsigned int auiLength);

@@ -3,6 +3,8 @@
 #include <cstring>
 #include <windows.h>
 
+thread_local constinit BSCoreMessage::ContextType BSCoreMessage::eMessageContextS;
+thread_local constinit WARNING_TYPES BSCoreMessage::eWarningContextS;
 bool BSCoreMessage::bMessageContextDisabled[CONTEXT_COUNT];
 bool BSCoreMessage::bWarningsDisabled[MAX_WARNING_TYPES];
 const char* BSCoreMessage::WarningContextStrings[MAX_WARNING_TYPES] = {

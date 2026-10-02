@@ -2,12 +2,26 @@
 #include "BSCore/MemoryManager.h"
 
 #include <emmintrin.h>
+#include <cstdlib>
+
+BSTimer appTimer;
 
 float BSTimer::fGlobalTimeMultiplier = 1.0f;
 float BSTimer::fGlobalTimeMultiplierTarget = 1.0f;
 float BSTimer::fGlobalTimeMultiplierStep = 0.02f;
 float BSTimer::fFrequencyMS;
 float BSTimer::fFrequencyUS;
+
+int BSTimer::InitializeAppTimer()
+{
+	appTimer.Init(0);
+	return std::atexit(DestroyAppTimer);
+}
+
+void BSTimer::DestroyAppTimer()
+{
+	appTimer.ClearSamples();
+}
 
 namespace
 {

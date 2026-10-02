@@ -16,6 +16,8 @@ public:
 	void Disable();
 	void Init(unsigned int auiTime);
 	long long GetHighPrecisionTime() const;
+	static int InitializeAppTimer();
+	static void DestroyAppTimer();
 
 	static float fGlobalTimeMultiplier;
 	static float fGlobalTimeMultiplierTarget;
@@ -45,3 +47,5 @@ static_assert(offsetof(BSTimer, fDelta) == 0x18);
 static_assert(offsetof(BSTimer, uiFirstTime) == 0x28);
 static_assert(offsetof(BSTimer, uiDisableCounter) == 0x34);
 static_assert(offsetof(BSTimer, bUseGlobalTimeMultiplierTarget) == 0x3A);
+
+extern BSTimer appTimer;

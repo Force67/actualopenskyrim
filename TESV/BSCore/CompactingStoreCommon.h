@@ -39,6 +39,8 @@ namespace CompactingStore
 		void operator()(void* apDest, const void* apSrc, size_t auiSize) override;
 		~NoopMoveCallback() override = default;
 		static NoopMoveCallback instance;
+		static int InitializeInstance();
+		static void DestroyInstance();
 	};
 
 	struct AllocatedBlock : BlockHeader

@@ -3,6 +3,7 @@
 #include "BSCore/MemoryDefs.h"
 #include "BSCore/ScrapHeap.h"
 #include "BSCore/BSTSingleton.h"
+#include "BSCore/BSTEvent.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -57,7 +58,14 @@ namespace MemoryManagement
 		State eState;
 	};
 
-	class PMPEventSource;
+	class PMPEventSource : public BSTEventSource<PMPEvent>, public BSTSingletonImplicit<PMPEventSource>
+	{
+	public:
+		static void DestroySingleton();
+		alignas(8) static unsigned char cSourceBufferS[88];
+		static int iSourceInitS;
+	};
+	static_assert(sizeof(PMPEventSource) == 88);
 	void RegisterSink(BSTEventSink<PMPEvent>* apSink);
 	void UnregisterSink(BSTEventSink<PMPEvent>* apSink);
 }
@@ -207,3 +215,5 @@ static_assert(offsetof(MemoryManager, bAllowPoolUse) == 0x449);
 static_assert(offsetof(MemoryManager, iAlignmentForPools) == 0x460);
 static_assert(offsetof(MemoryManager, iMainThreadMemoryProblemPassSignal) == 0x464);
 static_assert(offsetof(MemoryManager, iFailedAllocationSize) == 0x468);
+
+template <> MemoryManagement::PMPEventSource* BSTSingletonImplicit<MemoryManagement::PMPEventSource>::QInstance();

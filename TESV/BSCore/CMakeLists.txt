@@ -1,14 +1,23 @@
 add_library(bscore STATIC
 
+  NewOverLoads.cpp
   Win32/BSSemaphore_Win32.cpp
+  BSSpinLock.cpp
+  BSCore.cpp
   BSCoreUtils.cpp
   BSCoreMessage.cpp
+  BSCoreMessageHandler.cpp
+  BSCoreMessageSource.cpp
   BSTEvent.cpp
+  MemoryManagementEvents.cpp
   BSTimer.cpp
   Win32/BSTimer_Win32.cpp
   BSThread.cpp
   Win32/BSThread_Win32.cpp
   ../BSSystem/BSFixedString.cpp
+  ../BSSystem/BSFixedStringPreserveCase.cpp
+  ../BSSystem/BSStringPoolSingleton.cpp
+  ../BSSystem/BSStringPoolDelimited.cpp
   ../BSSystem/BSStringPool.cpp
   BSTSmallArray.cpp
   BSTArray.cpp
@@ -21,6 +30,7 @@ add_library(bscore STATIC
   BSTObjectArena.cpp
   BSSmallBlockAllocator.cpp
   CompactingStore.cpp
+  CompactingStoreCallback.cpp
   AbstractHeap.cpp
   MemoryHeap.cpp
   BSCRC32.cpp

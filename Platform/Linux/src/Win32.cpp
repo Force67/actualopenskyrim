@@ -143,6 +143,7 @@ namespace
 		pthread_cleanup_pop(1);
 		return reinterpret_cast<void*>(static_cast<uintptr_t>(result));
 	}
+	const int processBasePriority = getpriority(PRIO_PROCESS, getpid());
 	std::mutex handleMutex;
 	std::unordered_map<HANDLE, std::shared_ptr<Semaphore>> semaphores;
 
@@ -221,6 +222,11 @@ BOOL SetThreadPriority(HANDLE hThread, int nPriority)
 	case 15: nice = -20; break;
 	default: return 0;
 	}
+	nice += processBasePriority;
+	if (nice > 19)
+		nice = 19;
+	else if (nice < -20)
+		nice = -20;
 	auto thread = FindThread(hThread);
 	DWORD id;
 	if (hThread == GetCurrentThread())
@@ -453,4 +459,46 @@ BOOL TlsSetValue(DWORD dwTlsIndex, void* lpTlsValue)
 		return 0;
 	tlsValues[dwTlsIndex] = { tlsSlots[dwTlsIndex].generation, lpTlsValue };
 	return 1;
+}
+
+#include "BSCore/BSCore.h"
+#include <atomic>
+
+namespace
+{
+	std::mutex threadInitMutex;
+	std::condition_variable threadInitChanged;
+	int threadInitEpoch = (-2147483647 - 1);
+}
+
+void BSCore::InitThreadHeader(int* apGuard)
+{
+	std::unique_lock lock(threadInitMutex);
+	std::atomic_ref<int> guard(*apGuard);
+	while (guard.load(std::memory_order_acquire) == -1)
+		threadInitChanged.wait(lock);
+	if (!guard.load(std::memory_order_relaxed))
+		guard.store(-1, std::memory_order_release);
+	else
+		iThreadInitEpochS = threadInitEpoch;
+}
+
+void BSCore::InitThreadFooter(int* apGuard)
+{
+	{
+		std::lock_guard lock(threadInitMutex);
+		threadInitEpoch = static_cast<int>(static_cast<unsigned int>(threadInitEpoch) + 1);
+		std::atomic_ref<int>(*apGuard).store(threadInitEpoch, std::memory_order_release);
+		iThreadInitEpochS = threadInitEpoch;
+	}
+	threadInitChanged.notify_all();
+}
+
+void BSCore::InitThreadAbort(int* apGuard)
+{
+	{
+		std::lock_guard lock(threadInitMutex);
+		std::atomic_ref<int>(*apGuard).store(0, std::memory_order_release);
+	}
+	threadInitChanged.notify_all();
 }

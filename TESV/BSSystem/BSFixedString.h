@@ -13,6 +13,10 @@ public:
 	bool operator!() const;
 	unsigned int QLength() const;
 	static char* CreateDelimited(BSFixedString& arString, char* apSource, const char* apDelimiters);
+	static void CreatePreserveCase(BSFixedString& arString, const char* apSource);
+	static void DestroyEmptyString();
+	static const char* pEmptyStringS;
+	static int iEmptyStringInitS;
 
 	const char* pString;
 };
@@ -32,6 +36,10 @@ public:
 	const BSFixedStringW& operator<<(const wchar_t* apString);
 	const BSFixedStringW& operator=(const BSFixedStringW& arOther);
 	operator const wchar_t*() const;
+	static void CreatePreserveCase(BSFixedStringW& arString, const wchar_t* apSource);
+	static void DestroyEmptyString();
+	static const wchar_t* pEmptyStringS;
+	static int iEmptyStringInitS;
 
 	const wchar_t* pString;
 };

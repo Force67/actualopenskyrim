@@ -18,14 +18,7 @@
 IMemoryManagerFile::~IMemoryManagerFile() = default;
 IMemoryManagerFileFactory::~IMemoryManagerFileFactory() = default;
 
-namespace MemoryManagement
-{
-	class PMPEventSource : public BSTEventSource<PMPEvent>, public BSTSingletonImplicit<PMPEventSource>
-	{
-	};
-}
-
-thread_local constinit MEM_CONTEXT etMemContextS;
+thread_local constinit MEM_CONTEXT etMemContextS = MC_CORE_UNKNOWN;
 
 thread_local bool MemoryManager::bAllowCleanCompactingStoreST = true;
 thread_local unsigned int MemoryManager::uiThreadInitState;
