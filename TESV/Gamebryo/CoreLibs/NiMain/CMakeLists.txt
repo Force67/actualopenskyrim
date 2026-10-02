@@ -13,6 +13,7 @@ add_library(nimain STATIC
   NiTransform.cpp
   NiPlane.cpp
   NiFrustum.cpp
+  NiQuaternion.cpp
 )
 target_include_directories(nimain PUBLIC ${TESV_ROOT})
 target_link_libraries(nimain PUBLIC bscore)

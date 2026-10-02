@@ -6,7 +6,7 @@ The code lives in `TESV/` and follows the layout of the original engine: `TESV/S
 
 ## Progress
 
-<!-- progress -->895 of 196,935 functions reimplemented (0.45%)<!-- /progress -->
+<!-- progress -->906 of 196,939 functions reimplemented (0.46%)<!-- /progress -->
 
 ## Replaced third party code
 
