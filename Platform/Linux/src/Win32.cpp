@@ -1,4 +1,5 @@
 #include <windows.h>
+#include <io.h>
 
 #include <cstdio>
 #include <cerrno>
@@ -695,6 +696,52 @@ BOOL SetFileTime(HANDLE hFile, const FILETIME* lpCreationTime, const FILETIME* l
 		return FALSE;
 	}
 	return TRUE;
+}
+
+namespace
+{
+	void TmToSystemTime(const tm& kTm, long lNanoseconds, SYSTEMTIME* pTime)
+	{
+		pTime->wYear = static_cast<uint16_t>(kTm.tm_year + 1900);
+		pTime->wMonth = static_cast<uint16_t>(kTm.tm_mon + 1);
+		pTime->wDayOfWeek = static_cast<uint16_t>(kTm.tm_wday);
+		pTime->wDay = static_cast<uint16_t>(kTm.tm_mday);
+		pTime->wHour = static_cast<uint16_t>(kTm.tm_hour);
+		pTime->wMinute = static_cast<uint16_t>(kTm.tm_min);
+		pTime->wSecond = static_cast<uint16_t>(kTm.tm_sec);
+		pTime->wMilliseconds = static_cast<uint16_t>(lNanoseconds / 1000000);
+	}
+}
+
+BOOL FileTimeToSystemTime(const FILETIME* lpFileTime, LPSYSTEMTIME lpSystemTime)
+{
+	timespec ts = FileTimeToTimespec(*lpFileTime);
+	tm kTm;
+	if (!::gmtime_r(&ts.tv_sec, &kTm))
+		return FALSE;
+	TmToSystemTime(kTm, ts.tv_nsec, lpSystemTime);
+	return TRUE;
+}
+
+BOOL SystemTimeToTzSpecificLocalTime(const void*, const SYSTEMTIME* lpUniversalTime, LPSYSTEMTIME lpLocalTime)
+{
+	tm kTm = {};
+	kTm.tm_year = lpUniversalTime->wYear - 1900;
+	kTm.tm_mon = lpUniversalTime->wMonth - 1;
+	kTm.tm_mday = lpUniversalTime->wDay;
+	kTm.tm_hour = lpUniversalTime->wHour;
+	kTm.tm_min = lpUniversalTime->wMinute;
+	kTm.tm_sec = lpUniversalTime->wSecond;
+	time_t tTime = ::timegm(&kTm);
+	if (!::localtime_r(&tTime, &kTm))
+		return FALSE;
+	TmToSystemTime(kTm, lpUniversalTime->wMilliseconds * 1000000L, lpLocalTime);
+	return TRUE;
+}
+
+extern "C" int _access(const char* apPath, int aiMode)
+{
+	return ::access(apPath, aiMode);
 }
 
 BOOL DeleteFileA(const char* lpFileName)

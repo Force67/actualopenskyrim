@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "BSCore/BSMemoryutility.h"
+#include "BSCore/MemoryManager.h"
 
 // Fixed capacity string; the buffer doubles as the storage (no heap). A size
 // of 0xFFFF in sSize means "unknown, count it".
@@ -133,3 +134,41 @@ BSStaticStringT<SIZE>& BSStaticStringT<SIZE>::Append(const char* pStr)
 	sSize = uTotal <= 0xFFFF ? static_cast<uint16_t>(uTotal) : 0xFFFF;
 	return *this;
 }
+
+class DynamicMemoryManagementPol {};
+
+template <class Char, int SIZE, class MemoryPolicy> class BSStringT;
+
+// Heap backed string. sSize of 0xFFFF again means "unknown, count it"; a null
+// pString means "no allocation yet". auiMaxLen of 0 to Set means "use strlen".
+template <class Char>
+class BSStringT<Char, -1, DynamicMemoryManagementPol>
+{
+public:
+	BSStringT();
+	~BSStringT();
+	bool Set(const Char* apString, uint32_t auiMaxLen);
+	BSStringT& Append(const Char* apString);
+	uint32_t GetLength() const
+	{
+		if (sSize != 0xFFFF)
+			return sSize;
+		uint32_t uLength = 0;
+		while (pString[uLength])
+			++uLength;
+		return uLength;
+	}
+	const Char* QPtr() const { return pString; }
+
+	Char* pString;
+	uint16_t sSize;
+	uint16_t sCapacity;
+};
+using BSString = BSStringT<char, -1, DynamicMemoryManagementPol>;
+static_assert(sizeof(BSString) == 16);
+static_assert(offsetof(BSString, pString) == 0);
+static_assert(offsetof(BSString, sSize) == 8);
+static_assert(offsetof(BSString, sCapacity) == 10);
+
+extern template class BSStringT<char, -1, DynamicMemoryManagementPol>;
+extern template class BSStringT<wchar_t, -1, DynamicMemoryManagementPol>;

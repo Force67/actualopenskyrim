@@ -28,6 +28,8 @@ add_library(bscore STATIC
   ../BSSystem/BSSystemDir.cpp
   ../BSSystem/Win32/BSSystemDir_Win32.cpp
   ../BSSystem/BSSearchPath.cpp
+  ../BSSystem/BSFile.cpp
+  ../BSSystem/BSFile_Win32.cpp
   ../Gamebryo/CoreLibs/NiSystem/NiSearchPath.cpp
   ../Gamebryo/CoreLibs/NiSystem/Win32/NiFilename.cpp
   BSTSmallArray.cpp

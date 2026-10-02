@@ -141,6 +141,21 @@ struct FILETIME
 	DWORD dwHighDateTime;
 };
 
+typedef struct _SYSTEMTIME
+{
+	uint16_t wYear;
+	uint16_t wMonth;
+	uint16_t wDayOfWeek;
+	uint16_t wDay;
+	uint16_t wHour;
+	uint16_t wMinute;
+	uint16_t wSecond;
+	uint16_t wMilliseconds;
+} SYSTEMTIME, *LPSYSTEMTIME;
+
+BOOL FileTimeToSystemTime(const FILETIME* lpFileTime, LPSYSTEMTIME lpSystemTime);
+BOOL SystemTimeToTzSpecificLocalTime(const void* lpTimeZoneInformation, const SYSTEMTIME* lpUniversalTime, LPSYSTEMTIME lpLocalTime);
+
 struct OVERLAPPED
 {
 	uintptr_t Internal;
