@@ -21,7 +21,7 @@ struct BSTObjectArenaScrapAllocBase
 struct BSTObjectArenaScrapAlloc : BSTObjectArenaScrapAllocBase
 {
 	using BSTObjectArenaScrapAllocBase::BSTObjectArenaScrapAllocBase;
-	void* Allocate(unsigned int auiSize) const;
+	void* Allocate(size_t auiSize) const;
 	void Deallocate(void* apBlock) const;
 };
 

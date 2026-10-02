@@ -10,7 +10,25 @@
 #include <strings.h>
 #include <pthread.h>
 #include <sys/resource.h>
+#include <sys/stat.h>
 #include <sys/syscall.h>
+
+DWORD GetFileAttributesA(const char* lpFileName)
+{
+	struct stat kLink, kFile;
+	if (!lpFileName || lstat(lpFileName, &kLink) || stat(lpFileName, &kFile))
+		return INVALID_FILE_ATTRIBUTES;
+	DWORD ulAttributes = S_ISDIR(kFile.st_mode) ? FILE_ATTRIBUTE_DIRECTORY : 0;
+	if (S_ISLNK(kLink.st_mode))
+		ulAttributes |= FILE_ATTRIBUTE_REPARSE_POINT;
+	if (!(kFile.st_mode & (S_IWUSR | S_IWGRP | S_IWOTH)))
+		ulAttributes |= FILE_ATTRIBUTE_READONLY;
+	const char* pcName = strrchr(lpFileName, '/');
+	pcName = pcName ? pcName + 1 : lpFileName;
+	if (pcName[0] == '.' && pcName[1] && strcmp(pcName, ".."))
+		ulAttributes |= FILE_ATTRIBUTE_HIDDEN;
+	return ulAttributes ? ulAttributes : FILE_ATTRIBUTE_NORMAL;
+}
 
 void ExitThread(DWORD dwExitCode)
 {
@@ -27,6 +45,18 @@ extern "C" int* _errno()
 extern "C" void _invalid_parameter_noinfo()
 {
 	std::abort();
+}
+
+extern "C" int fopen_s(FILE** pFile, const char* filename, const char* mode)
+{
+	if (!pFile || !filename || !mode)
+	{
+		_invalid_parameter_noinfo();
+		errno = EINVAL;
+		return EINVAL;
+	}
+	*pFile = fopen(filename, mode);
+	return *pFile ? 0 : errno;
 }
 
 extern "C" int _stricmp(const char* apFirst, const char* apSecond)
@@ -114,6 +144,8 @@ namespace
 		std::condition_variable changed;
 		DWORD id = 0;
 		bool finished = false;
+		bool started = false;
+		DWORD suspendCount = 0;
 		LPTHREAD_START_ROUTINE start;
 		void* parameter;
 	};
@@ -133,9 +165,11 @@ namespace
 		auto thread = *argument;
 		argument.reset();
 		{
-			std::lock_guard lock(thread->mutex);
+			std::unique_lock lock(thread->mutex);
 			thread->id = static_cast<DWORD>(syscall(SYS_gettid));
 			thread->changed.notify_all();
+			thread->changed.wait(lock, [&] { return thread->suspendCount == 0; });
+			thread->started = true;
 		}
 		DWORD result;
 		pthread_cleanup_push(ThreadFinished, thread.get());
@@ -170,7 +204,7 @@ HANDLE GetCurrentThread()
 HANDLE CreateThread(void* lpThreadAttributes, size_t dwStackSize, LPTHREAD_START_ROUTINE lpStartAddress,
 	void* lpParameter, DWORD dwCreationFlags, DWORD* lpThreadId)
 {
-	if (lpThreadAttributes || !lpStartAddress || dwCreationFlags)
+	if (lpThreadAttributes || !lpStartAddress || (dwCreationFlags & ~DWORD(4)))
 		return nullptr;
 	pthread_attr_t attributes;
 	if (pthread_attr_init(&attributes))
@@ -179,6 +213,7 @@ HANDLE CreateThread(void* lpThreadAttributes, size_t dwStackSize, LPTHREAD_START
 	if (!error && dwStackSize)
 		error = pthread_attr_setstacksize(&attributes, dwStackSize);
 	auto thread = std::make_shared<Thread>();
+	thread->suspendCount = dwCreationFlags == 4 ? 1 : 0;
 	thread->start = lpStartAddress;
 	thread->parameter = lpParameter;
 	auto* argument = new std::shared_ptr<Thread>(thread);
@@ -205,7 +240,63 @@ HANDLE CreateThread(void* lpThreadAttributes, size_t dwStackSize, LPTHREAD_START
 
 DWORD ResumeThread(HANDLE hThread)
 {
-	return FindThread(hThread) ? 0 : DWORD(-1);
+	auto thread = FindThread(hThread);
+	if (!thread)
+		return DWORD(-1);
+	std::lock_guard lock(thread->mutex);
+	DWORD previous = thread->suspendCount;
+	if (previous)
+	{
+		--thread->suspendCount;
+		if (!thread->suspendCount)
+			thread->changed.notify_all();
+	}
+	return previous;
+}
+
+DWORD SuspendThread(HANDLE hThread)
+{
+	auto thread = FindThread(hThread);
+	if (!thread)
+		return DWORD(-1);
+	std::lock_guard lock(thread->mutex);
+	if (thread->finished || thread->started || thread->suspendCount >= 127)
+		return DWORD(-1);
+	return thread->suspendCount++;
+}
+
+uintptr_t SetThreadAffinityMask(HANDLE hThread, uintptr_t dwThreadAffinityMask)
+{
+	auto thread = FindThread(hThread);
+	std::unique_lock<std::mutex> lock;
+	DWORD id;
+	if (hThread == GetCurrentThread())
+		id = static_cast<DWORD>(syscall(SYS_gettid));
+	else
+	{
+		if (!thread)
+			return 0;
+		lock = std::unique_lock(thread->mutex);
+		if (thread->finished)
+			return 0;
+		id = thread->id;
+	}
+	cpu_set_t previousSet;
+	if (sched_getaffinity(id, sizeof(previousSet), &previousSet))
+		return 0;
+	uintptr_t previous = 0;
+	cpu_set_t requestedSet;
+	CPU_ZERO(&requestedSet);
+	for (unsigned int cpu = 0; cpu < sizeof(uintptr_t) * 8; ++cpu)
+	{
+		if (CPU_ISSET(cpu, &previousSet))
+			previous |= uintptr_t(1) << cpu;
+		if (dwThreadAffinityMask & (uintptr_t(1) << cpu))
+			CPU_SET(cpu, &requestedSet);
+	}
+	if (!previous || sched_setaffinity(id, sizeof(requestedSet), &requestedSet))
+		return 0;
+	return previous;
 }
 
 BOOL SetThreadPriority(HANDLE hThread, int nPriority)
@@ -501,4 +592,213 @@ void BSCore::InitThreadAbort(int* apGuard)
 		std::atomic_ref<int>(*apGuard).store(0, std::memory_order_release);
 	}
 	threadInitChanged.notify_all();
+}
+
+extern "C" int _strnicmp(const char* apFirst, const char* apSecond, size_t auiCount)
+{
+	return strncasecmp(apFirst, apSecond, auiCount);
+}
+
+extern "C" int strcpy_s(char* apDest, size_t auiSize, const char* apSource)
+{
+	if (!apDest || !auiSize || !apSource)
+	{
+		if (apDest && auiSize)
+			*apDest = 0;
+		_invalid_parameter_noinfo();
+		return EINVAL;
+	}
+	size_t uiLength = strlen(apSource);
+	if (uiLength >= auiSize)
+	{
+		*apDest = 0;
+		_invalid_parameter_noinfo();
+		return ERANGE;
+	}
+	for (size_t i = 0; i <= uiLength; ++i)
+		apDest[i] = apSource[i];
+	return 0;
+}
+
+extern "C" int strcat_s(char* apDest, size_t auiSize, const char* apSource)
+{
+	if (!apDest || !auiSize || !apSource)
+	{
+		if (apDest && auiSize)
+			*apDest = 0;
+		_invalid_parameter_noinfo();
+		return EINVAL;
+	}
+	size_t uiLength = strnlen(apDest, auiSize);
+	size_t uiSourceLength = strlen(apSource);
+	if (uiLength >= auiSize || uiSourceLength >= auiSize - uiLength)
+	{
+		*apDest = 0;
+		_invalid_parameter_noinfo();
+		return ERANGE;
+	}
+	for (size_t i = 0; i <= uiSourceLength; ++i)
+		apDest[uiLength + i] = apSource[i];
+	return 0;
+}
+
+extern "C" char* _getcwd(char* apBuffer, int aiSize)
+{
+	if (aiSize < 0 || (apBuffer && !aiSize))
+	{
+		_invalid_parameter_noinfo();
+		errno = EINVAL;
+		return nullptr;
+	}
+	return getcwd(apBuffer, static_cast<size_t>(aiSize));
+}
+
+static char MainModule;
+
+HMODULE GetModuleHandleA(const char* lpModuleName)
+{
+	return lpModuleName ? nullptr : &MainModule;
+}
+
+DWORD GetModuleFileNameA(HMODULE hModule, char* lpFilename, DWORD nSize)
+{
+	if ((hModule && hModule != &MainModule) || !lpFilename || !nSize)
+		return 0;
+	ssize_t iLength = readlink("/proc/self/exe", lpFilename, nSize);
+	if (iLength < 0)
+		return 0;
+	if (static_cast<DWORD>(iLength) == nSize)
+	{
+		lpFilename[nSize - 1] = 0;
+		return nSize;
+	}
+	lpFilename[iLength] = 0;
+	return static_cast<DWORD>(iLength);
+}
+
+extern "C" int _stat64i32(const char* apFilename, struct _stat64i32* apStat)
+{
+	if (!apFilename || !apStat)
+	{
+		errno = EINVAL;
+		return -1;
+	}
+	struct stat kStat;
+	if (stat(apFilename, &kStat))
+		return -1;
+	apStat->st_dev = static_cast<uint32_t>(kStat.st_dev);
+	apStat->st_ino = static_cast<uint16_t>(kStat.st_ino);
+	apStat->st_mode = static_cast<uint16_t>(kStat.st_mode);
+	apStat->st_nlink = static_cast<int16_t>(kStat.st_nlink);
+	apStat->st_uid = static_cast<int16_t>(kStat.st_uid);
+	apStat->st_gid = static_cast<int16_t>(kStat.st_gid);
+	apStat->st_rdev = static_cast<uint32_t>(kStat.st_rdev);
+	apStat->st_size = static_cast<int32_t>(kStat.st_size);
+	apStat->st_atime = kStat.st_atim.tv_sec;
+	apStat->st_mtime = kStat.st_mtim.tv_sec;
+	apStat->st_ctime = kStat.st_ctim.tv_sec;
+	return 0;
+}
+
+void GetSystemInfo(SYSTEM_INFO* lpSystemInfo)
+{
+	long iProcessors = sysconf(_SC_NPROCESSORS_ONLN);
+	long iPageSize = sysconf(_SC_PAGESIZE);
+	DWORD uiProcessors = iProcessors > 0 ? static_cast<DWORD>(iProcessors) : 1;
+	*lpSystemInfo = {};
+	lpSystemInfo->wProcessorArchitecture = 9;
+	lpSystemInfo->dwPageSize = iPageSize > 0 ? static_cast<DWORD>(iPageSize) : 4096;
+	lpSystemInfo->lpMinimumApplicationAddress = reinterpret_cast<void*>(uintptr_t(0x10000));
+	lpSystemInfo->lpMaximumApplicationAddress = reinterpret_cast<void*>((uintptr_t(1) << 47) - 1);
+	lpSystemInfo->dwActiveProcessorMask = uiProcessors >= sizeof(uintptr_t) * 8 ? ~uintptr_t(0) : (uintptr_t(1) << uiProcessors) - 1;
+	lpSystemInfo->dwNumberOfProcessors = uiProcessors;
+	lpSystemInfo->dwProcessorType = 8664;
+	lpSystemInfo->dwAllocationGranularity = 0x10000;
+	lpSystemInfo->wProcessorLevel = 6;
+}
+
+void RaiseException(DWORD dwExceptionCode, DWORD, DWORD, const ULONG_PTR*)
+{
+	if (dwExceptionCode != 0x406D1388)
+		std::abort();
+}
+
+extern "C" int _splitpath_s(const char* path, char* drive, size_t driveSize, char* dir, size_t dirSize, char* fname, size_t fnameSize, char* ext, size_t extSize)
+{
+	char* outputs[] = {drive, dir, fname, ext};
+	size_t sizes[] = {driveSize, dirSize, fnameSize, extSize};
+	const auto clear = [&]
+	{
+		for (unsigned int i = 0; i < 4; ++i)
+			if (outputs[i] && sizes[i])
+				outputs[i][0] = 0;
+	};
+	bool valid = path != nullptr;
+	for (unsigned int i = 0; i < 4; ++i)
+		valid = valid && ((outputs[i] == nullptr) == (sizes[i] == 0));
+	if (!valid)
+	{
+		clear();
+		_invalid_parameter_noinfo();
+		errno = EINVAL;
+		return EINVAL;
+	}
+	size_t driveLength = path[0] && path[1] == ':' ? 2 : 0;
+	const char* start = path + driveLength;
+	const char* file = start;
+	for (const char* cursor = start; *cursor; ++cursor)
+		if (*cursor == '/' || *cursor == '\\')
+			file = cursor + 1;
+	const char* end = file + std::strlen(file);
+	const char* extension = std::strrchr(file, '.');
+	if (!extension)
+		extension = end;
+	const char* components[] = {path, start, file, extension};
+	size_t lengths[] = {driveLength, static_cast<size_t>(file - start), static_cast<size_t>(extension - file), static_cast<size_t>(end - extension)};
+	for (unsigned int i = 0; i < 4; ++i)
+	{
+		if (outputs[i] && sizes[i] <= lengths[i])
+		{
+			clear();
+			errno = ERANGE;
+			return ERANGE;
+		}
+	}
+	for (unsigned int i = 0; i < 4; ++i)
+	{
+		if (outputs[i])
+		{
+			std::memcpy(outputs[i], components[i], lengths[i]);
+			outputs[i][lengths[i]] = 0;
+		}
+	}
+	return 0;
+}
+
+extern "C" int strncpy_s(char* apDest, size_t auiSize, const char* apSource, size_t auiCount)
+{
+	if (!apDest || !auiSize || !apSource)
+	{
+		if (apDest && auiSize)
+			*apDest = 0;
+		_invalid_parameter_noinfo();
+		errno = EINVAL;
+		return EINVAL;
+	}
+	bool bTruncate = auiCount == SIZE_MAX;
+	size_t uiLimit = bTruncate ? auiSize - 1 : (auiCount < auiSize ? auiCount : auiSize);
+	size_t uiLength = 0;
+	while (uiLength < uiLimit && apSource[uiLength])
+		++uiLength;
+	if (!bTruncate && uiLength == auiSize)
+	{
+		*apDest = 0;
+		_invalid_parameter_noinfo();
+		errno = ERANGE;
+		return ERANGE;
+	}
+	for (size_t i = 0; i < uiLength; ++i)
+		apDest[i] = apSource[i];
+	apDest[uiLength] = 0;
+	return bTruncate && apSource[uiLength] ? 80 : 0;
 }

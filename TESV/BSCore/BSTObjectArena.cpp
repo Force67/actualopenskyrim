@@ -17,7 +17,7 @@ BSTObjectArenaScrapAllocBase::BSTObjectArenaScrapAllocBase() : pScrapHeap(Memory
 BSTObjectArenaScrapAllocBase::BSTObjectArenaScrapAllocBase(ScrapHeap* apScrapHeap) : pScrapHeap(apScrapHeap) {}
 BSTObjectArenaScrapAllocBase::~BSTObjectArenaScrapAllocBase() = default;
 
-void* BSTObjectArenaScrapAlloc::Allocate(unsigned int auiSize) const
+void* BSTObjectArenaScrapAlloc::Allocate(size_t auiSize) const
 {
 	return pScrapHeap->Allocate(auiSize, 8);
 }

@@ -16,6 +16,12 @@ using LONG = int32_t;
 #define WINAPI
 
 using HANDLE = void*;
+using ULONG_PTR = uintptr_t;
+
+#define __try try
+#define __except(filter) catch (...)
+constexpr int EXCEPTION_CONTINUE_EXECUTION = -1;
+void RaiseException(DWORD dwExceptionCode, DWORD dwExceptionFlags, DWORD nNumberOfArguments, const ULONG_PTR* lpArguments);
 
 constexpr DWORD INFINITE = 0xFFFFFFFF;
 constexpr DWORD WAIT_OBJECT_0 = 0;
@@ -32,6 +38,8 @@ HANDLE GetCurrentThread();
 HANDLE CreateThread(void* lpThreadAttributes, size_t dwStackSize, LPTHREAD_START_ROUTINE lpStartAddress,
 	void* lpParameter, DWORD dwCreationFlags, DWORD* lpThreadId);
 DWORD ResumeThread(HANDLE hThread);
+DWORD SuspendThread(HANDLE hThread);
+uintptr_t SetThreadAffinityMask(HANDLE hThread, uintptr_t dwThreadAffinityMask);
 BOOL SetThreadPriority(HANDLE hThread, int nPriority);
 
 union LARGE_INTEGER
@@ -185,3 +193,39 @@ inline int memmove_s(void* dest, size_t destSize, const void* src, size_t count)
 	memmove(dest, src, count);
 	return 0;
 }
+
+using HMODULE = void*;
+HMODULE GetModuleHandleA(const char* lpModuleName);
+DWORD GetModuleFileNameA(HMODULE hModule, char* lpFilename, DWORD nSize);
+
+struct SYSTEM_INFO
+{
+	union
+	{
+		DWORD dwOEMId;
+		struct
+		{
+			uint16_t wProcessorArchitecture;
+			uint16_t wReserved;
+		};
+	};
+	DWORD dwPageSize;
+	void* lpMinimumApplicationAddress;
+	void* lpMaximumApplicationAddress;
+	uintptr_t dwActiveProcessorMask;
+	DWORD dwNumberOfProcessors;
+	DWORD dwProcessorType;
+	DWORD dwAllocationGranularity;
+	uint16_t wProcessorLevel;
+	uint16_t wProcessorRevision;
+};
+static_assert(sizeof(SYSTEM_INFO) == 48);
+void GetSystemInfo(SYSTEM_INFO* lpSystemInfo);
+
+constexpr DWORD INVALID_FILE_ATTRIBUTES = 0xFFFFFFFF;
+constexpr DWORD FILE_ATTRIBUTE_READONLY = 1;
+constexpr DWORD FILE_ATTRIBUTE_HIDDEN = 2;
+constexpr DWORD FILE_ATTRIBUTE_DIRECTORY = 0x10;
+constexpr DWORD FILE_ATTRIBUTE_NORMAL = 0x80;
+constexpr DWORD FILE_ATTRIBUTE_REPARSE_POINT = 0x400;
+DWORD GetFileAttributesA(const char* lpFileName);

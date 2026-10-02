@@ -68,7 +68,7 @@ void AbstractHeap::GetHeapStats(HeapStats* apStats, bool abFullBlockInfo)
 	apStats->iNumFreeBlocks = iNumFreeBlocks;
 	apStats->uiHeapOverhead = sizeof(AbstractHeap);
 	apStats->uiFreeListOverhead = sizeof(SmallFreeListsA) + sizeof(LargeFreeTreeA);
-	apStats->uiBlockOverhead = static_cast<uint32_t>(iNumBlocks) * uint32_t(sizeof(HeapBlock));
+	apStats->uiBlockOverhead = static_cast<int32_t>(static_cast<uint32_t>(iNumBlocks) * uint32_t(sizeof(HeapBlock)));
 	apStats->uiMemFreeInBlocks = iMemAllocated - iBlockMemAllocated;
 	apStats->uiMemUsedInBlocks = iBlockMemAllocated;
 	apStats->uiSmallestFreeBlock = 0xFFFFFFF;

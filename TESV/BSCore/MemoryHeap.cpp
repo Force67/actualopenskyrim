@@ -75,7 +75,7 @@ size_t MemoryHeap::CreateMorePages(void* apMem, size_t aiCurrentSize, size_t aiR
 size_t MemoryHeap::CleanExtraPages(void* apMem, size_t aiCurrentSize, size_t aiFreeBytes)
 {
 	const size_t uiSize = aiFreeBytes & ~size_t(iPageSize - 1);
-	if (uiSize >= iPageSize && VirtualFree(static_cast<char*>(apMem) + aiCurrentSize - uiSize, uiSize, MEM_DECOMMIT))
+	if (uiSize >= iPageSize && VirtualFree(static_cast<char*>(apMem) + aiCurrentSize - uiSize, uiSize, MEM_DECOMMIT) == 1)
 		return uiSize;
 	return 0;
 }

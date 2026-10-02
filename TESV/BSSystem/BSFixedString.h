@@ -3,6 +3,7 @@
 class BSFixedString
 {
 public:
+	BSFixedString() : pString(nullptr) {}
 	explicit BSFixedString(const char* apString);
 	BSFixedString(const BSFixedString& arOther);
 	BSFixedString(BSFixedString&& arOther);

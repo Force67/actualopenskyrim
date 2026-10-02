@@ -111,7 +111,7 @@ class BSCoreMessage::MessageSource : public BSTEventSource<Event>
 public:
 	static MessageSource& QInstance();
 	static void DestroySingleton();
-	static unsigned char cSourceBufferS[sizeof(BSTEventSource<Event>)];
+	alignas(8) static unsigned char cSourceBufferS[sizeof(BSTEventSource<Event>)];
 	static int iSourceInitS;
 };
 static_assert(sizeof(BSCoreMessage::MessageSource) == 0x58);

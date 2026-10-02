@@ -16,5 +16,6 @@ set(OPENSKYRIM_PLATFORM_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/Platform/Linux/src/W
 
 add_subdirectory(TESV/BSCore)
 add_subdirectory(TESV/Gamebryo/CoreLibs/NiMain)
+add_subdirectory(TESV/Gamebryo/CoreLibs/NiSystem)
 
-set(OPENSKYRIM_LIBS bscore nimain CACHE INTERNAL "Engine libraries")
+set(OPENSKYRIM_LIBS bscore nimain nisystem CACHE INTERNAL "Engine libraries")
