@@ -94,6 +94,8 @@ class BSTArrayConstIterator
 {
 public:
 	explicit BSTArrayConstIterator(const T* apCurrent = nullptr) : pCurrent(apCurrent) {}
+	BSTArrayConstIterator(const BSTArrayConstIterator& arOther) : pCurrent(arOther.pCurrent) {}
+	~BSTArrayConstIterator() {}
 	const T& operator*() const { return *pCurrent; }
 	const T* operator->() const { return pCurrent; }
 	BSTArrayConstIterator& operator++() { ++pCurrent; return *this; }

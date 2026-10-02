@@ -33,6 +33,12 @@ constexpr DWORD WAIT_OBJECT_0 = 0;
 constexpr DWORD WAIT_TIMEOUT = 258;
 constexpr DWORD WAIT_FAILED = 0xFFFFFFFF;
 
+HANDLE CreateEventA(void* lpEventAttributes, BOOL bManualReset, BOOL bInitialState, const char* lpName);
+HANDLE OpenEventA(DWORD dwDesiredAccess, BOOL bInheritHandle, const char* lpName);
+BOOL SetEvent(HANDLE hEvent);
+HANDLE CreateMutexA(void* lpMutexAttributes, BOOL bInitialOwner, const char* lpName);
+HANDLE OpenMutexA(DWORD dwDesiredAccess, BOOL bInheritHandle, const char* lpName);
+BOOL ReleaseMutex(HANDLE hMutex);
 HANDLE CreateSemaphoreA(void* lpSemaphoreAttributes, LONG lInitialCount, LONG lMaximumCount, const char* lpName);
 HANDLE CreateSemaphoreW(void* lpSemaphoreAttributes, LONG lInitialCount, LONG lMaximumCount, const wchar_t* lpName);
 BOOL ReleaseSemaphore(HANDLE hSemaphore, LONG lReleaseCount, LONG* lpPreviousCount);
@@ -88,6 +94,11 @@ inline LONG InterlockedExchange(LONG volatile* Target, LONG Value)
 	return __atomic_exchange_n(Target, Value, __ATOMIC_SEQ_CST);
 }
 
+inline LONG InterlockedExchangeAdd(LONG volatile* Addend, LONG Value)
+{
+	return __atomic_fetch_add(Addend, Value, __ATOMIC_SEQ_CST);
+}
+
 inline LONG InterlockedIncrement(LONG volatile* Addend)
 {
 	return __atomic_add_fetch(Addend, 1, __ATOMIC_SEQ_CST);
@@ -134,6 +145,7 @@ constexpr DWORD ERROR_ACCESS_DENIED = 5;
 constexpr DWORD ERROR_WRITE_PROTECT = 19;
 constexpr DWORD ERROR_ALREADY_EXISTS = 183;
 constexpr DWORD ERROR_GEN_FAILURE = 31;
+constexpr DWORD ERROR_INVALID_PARAMETER = 87;
 
 typedef struct _FILETIME
 {
@@ -188,6 +200,7 @@ BOOL SetFilePointerEx(HANDLE hFile, LARGE_INTEGER liDistanceToMove, LARGE_INTEGE
 BOOL GetFileSizeEx(HANDLE hFile, LARGE_INTEGER* lpFileSize);
 BOOL SetEndOfFile(HANDLE hFile);
 BOOL FlushFileBuffers(HANDLE hFile);
+BOOL FileTimeToLocalFileTime(const FILETIME* lpFileTime, FILETIME* lpLocalFileTime);
 BOOL GetFileTime(HANDLE hFile, FILETIME* lpCreationTime, FILETIME* lpLastAccessTime, FILETIME* lpLastWriteTime);
 BOOL SetFileTime(HANDLE hFile, const FILETIME* lpCreationTime, const FILETIME* lpLastAccessTime, const FILETIME* lpLastWriteTime);
 BOOL DeleteFileA(const char* lpFileName);
@@ -239,6 +252,25 @@ struct WIN32_FIND_DATAA
 	char cAlternateFileName[14];
 };
 using LPWIN32_FIND_DATAA = WIN32_FIND_DATAA*;
+
+struct WIN32_FILE_ATTRIBUTE_DATA
+{
+	DWORD dwFileAttributes;
+	FILETIME ftCreationTime;
+	FILETIME ftLastAccessTime;
+	FILETIME ftLastWriteTime;
+	DWORD nFileSizeHigh;
+	DWORD nFileSizeLow;
+};
+enum GET_FILEEX_INFO_LEVELS { GetFileExInfoStandard, GetFileExMaxInfoLevel };
+union ULARGE_INTEGER
+{
+	struct { DWORD LowPart; DWORD HighPart; };
+	uint64_t QuadPart;
+};
+BOOL GetFileAttributesExA(const char* lpFileName, GET_FILEEX_INFO_LEVELS fInfoLevelId, void* lpFileInformation);
+BOOL GetDiskFreeSpaceExA(const char* lpDirectoryName, ULARGE_INTEGER* lpFreeBytesAvailableToCaller,
+	ULARGE_INTEGER* lpTotalNumberOfBytes, ULARGE_INTEGER* lpTotalNumberOfFreeBytes);
 
 HANDLE FindFirstFileA(const char* lpFileName, LPWIN32_FIND_DATAA lpFindFileData);
 BOOL FindNextFileA(HANDLE hFindFile, LPWIN32_FIND_DATAA lpFindFileData);

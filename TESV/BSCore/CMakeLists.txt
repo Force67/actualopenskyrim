@@ -1,6 +1,19 @@
 add_library(bscore STATIC
 
   NewOverLoads.cpp
+  ../BSResource/BSResourceID.cpp
+  ../BSResource/BSResourceBTree.cpp
+  ../BSResource/BSResourceLocation.cpp
+  ../BSResource/BSResource.cpp
+  ../BSResource/BSResourceStream.cpp
+  ../BSResource/BSResourceReadBuffer.cpp
+  ../BSResource/BSResourceArchive.cpp
+  ../BSResource/Win32/BSResourceArchive_Win32.cpp
+  ../BSResource/BSResourceCacheDrive.cpp
+	../BSResource/Win32/BSResourceCacheDrive_Win32.cpp
+	../BSResource/BSResourceLooseFiles.cpp
+  ../BSResource/Win32/BSResourceLooseFiles_Win32.cpp
+  ../BSResource/Win32/BSResource_Win32.cpp
   Win32/BSSemaphore_Win32.cpp
   BSSpinLock.cpp
   BSCore.cpp

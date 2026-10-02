@@ -15,6 +15,7 @@ public:
 	unsigned int QLength() const;
 	static char* CreateDelimited(BSFixedString& arString, char* apSource, const char* apDelimiters);
 	static void CreatePreserveCase(BSFixedString& arString, const char* apSource);
+	static const BSFixedString& QEmptyString();
 	static void DestroyEmptyString();
 	static const char* pEmptyStringS;
 	static int iEmptyStringInitS;

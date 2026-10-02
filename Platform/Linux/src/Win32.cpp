@@ -12,6 +12,7 @@
 #include <pthread.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <sys/syscall.h>
 #include <fcntl.h>
 #include <dirent.h>
@@ -136,6 +137,7 @@ int MessageBoxA(void*, const char* lpText, const char* lpCaption, unsigned int)
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
+#include <string>
 
 namespace
 {
@@ -145,6 +147,10 @@ namespace
 		std::condition_variable changed;
 		LONG count;
 		LONG maximum;
+		enum Kind { SEMAPHORE, EVENT, MUTEX } kind = SEMAPHORE;
+		bool manualReset = false;
+		DWORD owner = 0;
+		unsigned int recursion = 0;
 	};
 	struct Thread
 	{
@@ -206,6 +212,58 @@ namespace
 		const auto it = Semaphores().find(handle);
 		return it == Semaphores().end() ? nullptr : it->second;
 	}
+	std::unordered_map<std::string, std::weak_ptr<Semaphore>>& NamedSyncObjects()
+	{
+		static std::unordered_map<std::string, std::weak_ptr<Semaphore>> kObjects;
+		return kObjects;
+	}
+
+	HANDLE RegisterSyncObject(const std::shared_ptr<Semaphore>& arObject)
+	{
+		static uintptr_t uiNextHandle = uintptr_t(0x400000000);
+		HANDLE hObject = reinterpret_cast<HANDLE>(++uiNextHandle);
+		Semaphores().emplace(hObject, arObject);
+		return hObject;
+	}
+
+	HANDLE OpenSyncObject(const char* apName, Semaphore::Kind aeKind)
+	{
+		if (!apName)
+			return nullptr;
+		std::lock_guard lock(handleMutex);
+		auto it = NamedSyncObjects().find(apName);
+		if (it == NamedSyncObjects().end())
+			return nullptr;
+		auto object = it->second.lock();
+		return object && object->kind == aeKind ? RegisterSyncObject(object) : nullptr;
+	}
+
+	HANDLE CreateSyncObject(const char* apName, Semaphore::Kind aeKind, bool abManualReset, bool abInitialState)
+	{
+		std::lock_guard lock(handleMutex);
+		std::shared_ptr<Semaphore> object;
+		if (apName)
+			object = NamedSyncObjects()[apName].lock();
+		if (object && object->kind != aeKind)
+			return nullptr;
+		if (!object)
+		{
+			object = std::make_shared<Semaphore>();
+			object->kind = aeKind;
+			object->manualReset = abManualReset;
+			object->maximum = 1;
+			object->count = aeKind == Semaphore::MUTEX ? !abInitialState : abInitialState;
+			if (aeKind == Semaphore::MUTEX && abInitialState)
+			{
+				object->owner = GetCurrentThreadId();
+				object->recursion = 1;
+			}
+			if (apName)
+				NamedSyncObjects()[apName] = object;
+		}
+		return RegisterSyncObject(object);
+	}
+
 }
 
 HANDLE GetCurrentThread()
@@ -382,6 +440,46 @@ BOOL ReleaseSemaphore(HANDLE hSemaphore, LONG lReleaseCount, LONG* lpPreviousCou
 	return 1;
 }
 
+HANDLE CreateEventA(void*, BOOL bManualReset, BOOL bInitialState, const char* lpName)
+{
+	return CreateSyncObject(lpName, Semaphore::EVENT, bManualReset != 0, bInitialState != 0);
+}
+
+HANDLE OpenEventA(DWORD, BOOL, const char* lpName) { return OpenSyncObject(lpName, Semaphore::EVENT); }
+HANDLE CreateMutexA(void*, BOOL bInitialOwner, const char* lpName)
+{
+	return CreateSyncObject(lpName, Semaphore::MUTEX, false, bInitialOwner != 0);
+}
+HANDLE OpenMutexA(DWORD, BOOL, const char* lpName) { return OpenSyncObject(lpName, Semaphore::MUTEX); }
+
+BOOL SetEvent(HANDLE hEvent)
+{
+	auto event = FindSemaphore(hEvent);
+	if (!event || event->kind != Semaphore::EVENT)
+		return FALSE;
+	std::lock_guard lock(event->mutex);
+	event->count = 1;
+	event->changed.notify_all();
+	return TRUE;
+}
+
+BOOL ReleaseMutex(HANDLE hMutex)
+{
+	auto mutex = FindSemaphore(hMutex);
+	if (!mutex || mutex->kind != Semaphore::MUTEX)
+		return FALSE;
+	std::lock_guard lock(mutex->mutex);
+	if (mutex->owner != GetCurrentThreadId() || !mutex->recursion)
+		return FALSE;
+	if (--mutex->recursion == 0)
+	{
+		mutex->owner = 0;
+		mutex->count = 1;
+		mutex->changed.notify_one();
+	}
+	return TRUE;
+}
+
 DWORD WaitForSingleObject(HANDLE hHandle, DWORD dwMilliseconds)
 {
 	auto semaphore = FindSemaphore(hHandle);
@@ -399,12 +497,20 @@ DWORD WaitForSingleObject(HANDLE hHandle, DWORD dwMilliseconds)
 		return WAIT_OBJECT_0;
 	}
 	std::unique_lock lock(semaphore->mutex);
-	const auto ready = [&] { return semaphore->count != 0; };
+	DWORD uiThread = GetCurrentThreadId();
+	const auto ready = [&] { return semaphore->count != 0 || (semaphore->kind == Semaphore::MUTEX && semaphore->owner == uiThread); };
 	if (dwMilliseconds == INFINITE)
 		semaphore->changed.wait(lock, ready);
 	else if (!semaphore->changed.wait_for(lock, std::chrono::milliseconds(dwMilliseconds), ready))
 		return WAIT_TIMEOUT;
-	--semaphore->count;
+	if (semaphore->kind == Semaphore::MUTEX)
+	{
+		semaphore->count = 0;
+		semaphore->owner = uiThread;
+		++semaphore->recursion;
+	}
+	else if (!semaphore->manualReset)
+		--semaphore->count;
 	return WAIT_OBJECT_0;
 }
 
@@ -668,6 +774,54 @@ BOOL FlushFileBuffers(HANDLE hFile)
 	return TRUE;
 }
 
+BOOL FileTimeToLocalFileTime(const FILETIME* lpFileTime, FILETIME* lpLocalFileTime)
+{
+	if (!lpFileTime || !lpLocalFileTime)
+	{
+		SetLastError(ERROR_INVALID_PARAMETER);
+		return FALSE;
+	}
+	uint64_t uiStamp = (uint64_t(lpFileTime->dwHighDateTime) << 32) | lpFileTime->dwLowDateTime;
+	time_t current = time(nullptr);
+	tm local;
+	if ((uiStamp >> 63) || !localtime_r(&current, &local))
+	{
+		SetLastError(ERROR_INVALID_PARAMETER);
+		return FALSE;
+	}
+	// This API applies the current timezone bias to every timestamp.
+	uiStamp += static_cast<uint64_t>(int64_t(local.tm_gmtoff) * 10000000);
+	if (uiStamp >> 63)
+	{
+		SetLastError(ERROR_INVALID_PARAMETER);
+		return FALSE;
+	}
+	*lpLocalFileTime = {static_cast<DWORD>(uiStamp), static_cast<DWORD>(uiStamp >> 32)};
+	return TRUE;
+}
+
+BOOL FileTimeToSystemTime(const FILETIME* lpFileTime, SYSTEMTIME* lpSystemTime)
+{
+	if (!lpFileTime || !lpSystemTime)
+	{
+		SetLastError(ERROR_INVALID_PARAMETER);
+		return FALSE;
+	}
+	uint64_t uiStamp = (uint64_t(lpFileTime->dwHighDateTime) << 32) | lpFileTime->dwLowDateTime;
+	time_t seconds = static_cast<time_t>(uiStamp / 10000000) - 11644473600LL;
+	tm utc;
+	if ((uiStamp >> 63) || !gmtime_r(&seconds, &utc))
+	{
+		SetLastError(ERROR_INVALID_PARAMETER);
+		return FALSE;
+	}
+	*lpSystemTime = {static_cast<uint16_t>(utc.tm_year + 1900), static_cast<uint16_t>(utc.tm_mon + 1),
+		static_cast<uint16_t>(utc.tm_wday), static_cast<uint16_t>(utc.tm_mday),
+		static_cast<uint16_t>(utc.tm_hour), static_cast<uint16_t>(utc.tm_min),
+		static_cast<uint16_t>(utc.tm_sec), static_cast<uint16_t>((uiStamp % 10000000) / 10000)};
+	return TRUE;
+}
+
 BOOL GetFileTime(HANDLE hFile, FILETIME* lpCreationTime, FILETIME* lpLastAccessTime, FILETIME* lpLastWriteTime)
 {
 	struct stat st;
@@ -682,6 +836,47 @@ BOOL GetFileTime(HANDLE hFile, FILETIME* lpCreationTime, FILETIME* lpLastAccessT
 		*lpLastWriteTime = TimespecToFileTime(st.st_mtim);
 	if (lpCreationTime)
 		*lpCreationTime = TimespecToFileTime(st.st_ctim);
+	return TRUE;
+}
+
+BOOL GetFileAttributesExA(const char* lpFileName, GET_FILEEX_INFO_LEVELS fInfoLevelId, void* lpFileInformation)
+{
+	if (!lpFileName || !lpFileInformation || fInfoLevelId != GetFileExInfoStandard)
+	{
+		tlastError = ERROR_INVALID_PARAMETER;
+		return FALSE;
+	}
+	struct stat st;
+	if (::stat(lpFileName, &st) != 0)
+	{
+		tlastError = ErrnoToWinError(errno);
+		return FALSE;
+	}
+	auto* pInfo = static_cast<WIN32_FILE_ATTRIBUTE_DATA*>(lpFileInformation);
+	pInfo->dwFileAttributes = GetFileAttributesA(lpFileName);
+	pInfo->ftCreationTime = TimespecToFileTime(st.st_ctim);
+	pInfo->ftLastAccessTime = TimespecToFileTime(st.st_atim);
+	pInfo->ftLastWriteTime = TimespecToFileTime(st.st_mtim);
+	pInfo->nFileSizeHigh = static_cast<DWORD>(static_cast<uint64_t>(st.st_size) >> 32);
+	pInfo->nFileSizeLow = static_cast<DWORD>(st.st_size);
+	return TRUE;
+}
+
+BOOL GetDiskFreeSpaceExA(const char* lpDirectoryName, ULARGE_INTEGER* lpFreeBytesAvailableToCaller,
+	ULARGE_INTEGER* lpTotalNumberOfBytes, ULARGE_INTEGER* lpTotalNumberOfFreeBytes)
+{
+	struct statvfs st;
+	if (::statvfs(lpDirectoryName ? lpDirectoryName : ".", &st) != 0)
+	{
+		tlastError = ErrnoToWinError(errno);
+		return FALSE;
+	}
+	if (lpFreeBytesAvailableToCaller)
+		lpFreeBytesAvailableToCaller->QuadPart = static_cast<uint64_t>(st.f_bavail) * st.f_frsize;
+	if (lpTotalNumberOfBytes)
+		lpTotalNumberOfBytes->QuadPart = static_cast<uint64_t>(st.f_blocks) * st.f_frsize;
+	if (lpTotalNumberOfFreeBytes)
+		lpTotalNumberOfFreeBytes->QuadPart = static_cast<uint64_t>(st.f_bfree) * st.f_frsize;
 	return TRUE;
 }
 
@@ -711,16 +906,6 @@ namespace
 		pTime->wSecond = static_cast<uint16_t>(kTm.tm_sec);
 		pTime->wMilliseconds = static_cast<uint16_t>(lNanoseconds / 1000000);
 	}
-}
-
-BOOL FileTimeToSystemTime(const FILETIME* lpFileTime, LPSYSTEMTIME lpSystemTime)
-{
-	timespec ts = FileTimeToTimespec(*lpFileTime);
-	tm kTm;
-	if (!::gmtime_r(&ts.tv_sec, &kTm))
-		return FALSE;
-	TmToSystemTime(kTm, ts.tv_nsec, lpSystemTime);
-	return TRUE;
 }
 
 BOOL SystemTimeToTzSpecificLocalTime(const void*, const SYSTEMTIME* lpUniversalTime, LPSYSTEMTIME lpLocalTime)
